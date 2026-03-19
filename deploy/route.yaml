@@ -1,0 +1,15 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: ocp-support-web
+  namespace: ocp-support-web
+  labels:
+    app: ocp-support-web
+spec:
+  to:
+    kind: Service
+    name: ocp-support-web
+  port:
+    targetPort: proxy
+  tls:
+    termination: reencrypt

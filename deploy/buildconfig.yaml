@@ -1,0 +1,29 @@
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: ocp-support-web
+  namespace: ocp-support-web
+  labels:
+    app: ocp-support-web
+spec:
+  output:
+    to:
+      kind: ImageStreamTag
+      name: ocp-support-web:latest
+  source:
+    type: Binary
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Containerfile
+      buildArgs:
+        - name: BUILDER_IMAGE
+          value: BUILDER_IMAGE_PLACEHOLDER
+        - name: RUNTIME_IMAGE
+          value: RUNTIME_IMAGE_PLACEHOLDER
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      memory: 2Gi

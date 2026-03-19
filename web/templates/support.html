@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OCP Support Web</title>
+    <link rel="icon" type="image/svg+xml" href="/static/logo.svg">
+    <link rel="stylesheet" href="https://unpkg.com/@patternfly/patternfly@5/patternfly.min.css">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="pf-v5-c-page">
+        <header class="pf-v5-c-masthead">
+            <div class="pf-v5-c-masthead__main">
+                <a class="pf-v5-c-masthead__brand" href="/" style="display:flex;align-items:center;gap:10px;text-decoration:none;color:inherit;">
+                    <img src="/static/logo.svg" alt="" width="36" height="36">
+                    <span>OCP Support Web</span>
+                </a>
+            </div>
+            <div class="pf-v5-c-masthead__content">
+                <nav class="pf-v5-c-nav pf-m-horizontal">
+                    <ul class="pf-v5-c-nav__list">
+                        <li class="pf-v5-c-nav__item"><a href="/" class="pf-v5-c-nav__link pf-m-current">Support</a></li>
+                        <li class="pf-v5-c-nav__item"><a href="/status" class="pf-v5-c-nav__link">Status</a></li>
+                    </ul>
+                </nav>
+                {{if .Username}}<div class="pf-v5-l-flex pf-m-align-items-center pf-m-gap-sm" style="margin-left:auto;">
+                    <span class="pf-v5-u-font-size-sm" style="color:#fff;">{{.Username}}</span>
+                </div>{{end}}
+            </div>
+        </header>
+        <main class="pf-v5-c-page__main" tabindex="-1">
+            <section class="pf-v5-c-page__main-section pf-m-light">
+                <div class="pf-v5-c-content">
+                    <h1>Support - Must-Gather</h1>
+                    <p>Collect diagnostic data from the cluster for troubleshooting.</p>
+                </div>
+            </section>
+            <section class="pf-v5-c-page__main-section">
+                <div class="pf-v5-c-card pf-v5-u-mb-lg">
+                    <div class="pf-v5-c-card__title"><h2 class="pf-v5-c-card__title-text">Cluster Information</h2></div>
+                    <div class="pf-v5-c-card__body">
+                        <div class="pf-v5-l-flex pf-m-align-items-center pf-m-gap-sm">
+                            <span class="pf-v5-u-font-size-sm pf-v5-u-font-weight-bold">Cluster UUID:</span>
+                            <code class="pf-v5-u-font-size-sm" id="cluster-uuid" style="user-select:all;">Loading...</code>
+                            <button class="pf-v5-c-button pf-m-plain pf-m-small" id="copy-uuid-btn" title="Copy to clipboard" style="padding:2px 6px;">
+                                <svg style="width:14px;height:14px;fill:currentColor" viewBox="0 0 16 16"><path d="M4 2a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V2zm2-1a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1H6z"/><path d="M2 5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-1h1v1a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h1v1H2z"/></svg>
+                            </button>
+                            <span class="pf-v5-u-font-size-xs pf-v5-u-color-200 hidden" id="copy-uuid-msg">Copied!</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="pf-v5-c-card pf-v5-u-mb-lg">
+                    <div class="pf-v5-c-card__title"><h2 class="pf-v5-c-card__title-text">Run Must-Gather</h2></div>
+                    <div class="pf-v5-c-card__body">
+                        <div class="pf-v5-u-font-size-sm pf-v5-u-font-weight-bold pf-v5-u-mb-md">Select type</div>
+                        <div class="gather-type-grid" id="gather-cards">
+                            <div class="gather-type-card selected" data-type="default">
+                                <div class="gather-type-card__title">Default</div>
+                                <div class="gather-type-card__desc">General cluster diagnostics and logs</div>
+                            </div>
+                            <div class="gather-type-card" data-type="virtualization" style="display:none;">
+                                <div class="gather-type-card__title">Virtualization</div>
+                                <div class="gather-type-card__desc">OpenShift Virtualization / KubeVirt</div>
+                            </div>
+                            <div class="gather-type-card" data-type="odf" style="display:none;">
+                                <div class="gather-type-card__title">ODF (Storage)</div>
+                                <div class="gather-type-card__desc">OpenShift Data Foundation / Ceph</div>
+                            </div>
+                            <div class="gather-type-card" data-type="audit">
+                                <div class="gather-type-card__title">Audit Logs</div>
+                                <div class="gather-type-card__desc">API server audit logging records</div>
+                            </div>
+                            <div class="gather-type-card" data-type="all">
+                                <div class="gather-type-card__title">Gather All</div>
+                                <div class="gather-type-card__desc">Default + Virtualization + ODF + Audit</div>
+                            </div>
+                        </div>
+
+                        <hr class="pf-v5-c-divider" style="margin-bottom:32px;">
+
+                        <div class="pf-v5-l-flex pf-m-align-items-center pf-m-justify-content-space-between">
+                            <div class="pf-v5-l-flex pf-m-align-items-center pf-m-gap-sm">
+                                <span class="pf-v5-u-font-size-sm pf-v5-u-font-weight-bold">Anonymize:</span>
+                                <div class="pf-v5-c-toggle-group" id="anonymize-toggle">
+                                    <div class="pf-v5-c-toggle-group__item">
+                                        <button class="pf-v5-c-toggle-group__button" data-anon="false" type="button">
+                                            <span class="pf-v5-c-toggle-group__text">Off</span>
+                                        </button>
+                                    </div>
+                                    <div class="pf-v5-c-toggle-group__item">
+                                        <button class="pf-v5-c-toggle-group__button" data-anon="true" type="button">
+                                            <span class="pf-v5-c-toggle-group__text">On</span>
+                                        </button>
+                                    </div>
+                                </div>
+                                <span class="pf-v5-u-font-size-sm pf-v5-u-color-200" id="anon-hint">Data will be sent as-is</span>
+                            </div>
+                            <button class="pf-v5-c-button pf-m-primary" id="start-gather-btn">Start Gathering</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="pf-v5-c-card pf-v5-u-mb-lg">
+                    <div class="pf-v5-c-card__title"><h2 class="pf-v5-c-card__title-text">Etcd Backup</h2></div>
+                    <div class="pf-v5-c-card__body">
+                        <p class="pf-v5-u-font-size-sm pf-v5-u-mb-md">Create a backup of the etcd database from a master node. The backup includes the etcd snapshot and static pod resources needed for cluster recovery.</p>
+                        <button class="pf-v5-c-button pf-m-primary" id="start-etcd-backup-btn">Start Etcd Backup</button>
+                    </div>
+                </div>
+
+                <div class="pf-v5-c-card pf-v5-u-mb-lg">
+                    <div class="pf-v5-c-card__title"><h2 class="pf-v5-c-card__title-text">Etcd Diagnostics</h2></div>
+                    <div class="pf-v5-c-card__body">
+                        <p class="pf-v5-u-font-size-sm pf-v5-u-color-200 pf-v5-u-mb-lg">Analyze etcd database contents to identify large or excessive objects. Results can be copied to clipboard or saved as a text file.</p>
+
+                        <div class="pf-v5-l-grid pf-m-gutter pf-m-all-12-col pf-m-all-6-col-on-lg">
+                            <div style="border:1px solid #d2d2d2;border-radius:6px;padding:20px;">
+                                <div class="pf-v5-u-font-size-md pf-v5-u-font-weight-bold pf-v5-u-mb-xs">Database Overview</div>
+                                <p class="pf-v5-u-font-size-xs pf-v5-u-color-200 pf-v5-u-mb-md">Scan the entire etcd database. These commands run directly against etcd and may take a few minutes on large clusters.</p>
+                                <div class="pf-v5-l-flex pf-m-column pf-m-gap-sm">
+                                    <button class="pf-v5-c-button pf-m-secondary pf-m-small diag-btn" data-diag="object-counts" style="text-align:left;">
+                                        Object Type Counts
+                                    </button>
+                                    <button class="pf-v5-c-button pf-m-secondary pf-m-small diag-btn" data-diag="object-sizes" style="text-align:left;">
+                                        Object Sizes in Etcd
+                                    </button>
+                                    <button class="pf-v5-c-button pf-m-secondary pf-m-small diag-btn" data-diag="ns-breakdown" style="text-align:left;">
+                                        Namespace Size Breakdown
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div style="border:1px solid #d2d2d2;border-radius:6px;padding:20px;">
+                                <div class="pf-v5-u-font-size-md pf-v5-u-font-weight-bold pf-v5-u-mb-xs">Drill Down by Resource</div>
+                                <p class="pf-v5-u-font-size-xs pf-v5-u-color-200 pf-v5-u-mb-md">Pick a resource type from the overview results (e.g. <code>secrets</code>, <code>events</code>, <code>configmaps</code>) and investigate further.</p>
+                                <div class="pf-v5-u-mb-md">
+                                    <label class="pf-v5-u-font-size-sm pf-v5-u-font-weight-bold pf-v5-u-mb-xs" for="diag-object-type" style="display:block;">Resource type</label>
+                                    <input class="pf-v5-c-form-control" type="text" id="diag-object-type" placeholder="e.g. secrets" style="width:100%;max-width:250px;">
+                                </div>
+                                <div class="pf-v5-l-flex pf-m-column pf-m-gap-sm">
+                                    <button class="pf-v5-c-button pf-m-secondary pf-m-small diag-btn" data-diag="creation-timeline" style="text-align:left;">
+                                        Creation Timeline
+                                    </button>
+                                    <button class="pf-v5-c-button pf-m-secondary pf-m-small diag-btn" data-diag="ns-object-counts" style="text-align:left;">
+                                        Count per Namespace
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="diag-results" class="pf-v5-u-mb-lg"></div>
+
+                <div class="pf-v5-c-card">
+                    <div class="pf-v5-c-card__title"><h2 class="pf-v5-c-card__title-text">Jobs</h2></div>
+                    <div class="pf-v5-c-card__body">
+                        <div id="jobs-empty" class="pf-v5-u-text-align-center pf-v5-u-py-xl pf-v5-u-color-300">
+                            No must-gather jobs yet. Click a button above to start one.
+                        </div>
+                        <div id="jobs-container"></div>
+                    </div>
+                </div>
+            </section>
+        </main>
+        <footer class="app-footer">This is a community application and is not supported by Red Hat. {{if .Version}}<span style="float:right;opacity:0.6;">v{{.Version}}</span>{{end}}</footer>
+    </div>
+    <script src="/static/support.js"></script>
+</body>
+</html>

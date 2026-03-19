@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ocp-support-web
+  namespace: ocp-support-web
+  labels:
+    app: ocp-support-web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ocp-support-web
+  template:
+    metadata:
+      labels:
+        app: ocp-support-web
+    spec:
+      serviceAccountName: ocp-support-web
+      containers:
+        - name: oauth-proxy
+          image: OAUTH_PROXY_IMAGE_PLACEHOLDER
+          args:
+            - --https-address=:8443
+            - --provider=openshift
+            - --openshift-service-account=ocp-support-web
+            - --upstream=http://localhost:8080
+            - --tls-cert=/etc/tls/private/tls.crt
+            - --tls-key=/etc/tls/private/tls.key
+            - --cookie-secret=COOKIE_SECRET_PLACEHOLDER
+            - --openshift-sar={"resource":"namespaces","verb":"create"}
+            - --pass-user-headers=true
+          ports:
+            - containerPort: 8443
+              name: proxy
+          volumeMounts:
+            - name: tls
+              mountPath: /etc/tls/private
+              readOnly: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
+
+        - name: ocp-support-web
+          image: IMAGE_PLACEHOLDER
+          env:
+            - name: CLUSTER_DOMAIN
+              value: CLUSTER_DOMAIN_PLACEHOLDER
+            - name: MUST_GATHER_IMAGE_DEFAULT
+              value: DEFAULT_MG_IMAGE_PLACEHOLDER
+            - name: MUST_GATHER_IMAGE_CNV
+              value: CNV_IMAGE_PLACEHOLDER
+            - name: MUST_GATHER_IMAGE_ODF
+              value: ODF_IMAGE_PLACEHOLDER
+          ports:
+            - containerPort: 8080
+              name: http
+            - containerPort: 8081
+              name: metrics
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+
+      volumes:
+        - name: tls
+          secret:
+            secretName: ocp-support-web-tls

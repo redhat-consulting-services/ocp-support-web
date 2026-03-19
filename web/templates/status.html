@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Status - OCP Support Web</title>
+    <link rel="icon" type="image/svg+xml" href="/static/logo.svg">
+    <link rel="stylesheet" href="https://unpkg.com/@patternfly/patternfly@5/patternfly.min.css">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="pf-v5-c-page">
+        <header class="pf-v5-c-masthead">
+            <div class="pf-v5-c-masthead__main">
+                <a class="pf-v5-c-masthead__brand" href="/" style="display:flex;align-items:center;gap:10px;text-decoration:none;color:inherit;">
+                    <img src="/static/logo.svg" alt="" width="36" height="36">
+                    <span>OCP Support Web</span>
+                </a>
+            </div>
+            <div class="pf-v5-c-masthead__content">
+                <nav class="pf-v5-c-nav pf-m-horizontal">
+                    <ul class="pf-v5-c-nav__list">
+                        <li class="pf-v5-c-nav__item"><a href="/" class="pf-v5-c-nav__link">Support</a></li>
+                        <li class="pf-v5-c-nav__item"><a href="/status" class="pf-v5-c-nav__link pf-m-current">Status</a></li>
+                    </ul>
+                </nav>
+                {{if .Username}}<div class="pf-v5-l-flex pf-m-align-items-center pf-m-gap-sm" style="margin-left:auto;">
+                    <span class="pf-v5-u-font-size-sm" style="color:#fff;">{{.Username}}</span>
+                </div>{{end}}
+            </div>
+        </header>
+        <main class="pf-v5-c-page__main" tabindex="-1">
+            <section class="pf-v5-c-page__main-section pf-m-light">
+                <div class="pf-v5-c-content">
+                    <h1>Cluster Status</h1>
+                    <p>Overview of cluster health, operators, node utilization, and top consumers.</p>
+                </div>
+            </section>
+            <section class="pf-v5-c-page__main-section" style="background-color:#f0f0f0;">
+                <h2 class="pf-v5-u-mb-md status-section-heading">Cluster Health</h2>
+                <div class="pf-v5-l-grid pf-m-gutter pf-m-all-6-col-on-md pf-m-all-4-col-on-lg pf-v5-u-mb-lg">
+                    <div class="pf-v5-c-card status-card" id="cluster-card">
+                        <div class="pf-v5-c-card__title"><h2 class="pf-v5-c-card__title-text">Cluster</h2></div>
+                        <div class="pf-v5-c-card__body" id="cluster-body">
+                            <div class="pf-v5-u-text-align-center pf-v5-u-py-md"><span class="pf-v5-c-spinner pf-m-md" role="progressbar"><span class="pf-v5-c-spinner__clipper"></span><span class="pf-v5-c-spinner__lead-ball"></span><span class="pf-v5-c-spinner__tail-ball"></span></span></div>
+                        </div>
+                    </div>
+                    <div class="pf-v5-c-card status-card" id="cp-card">
+                        <div class="pf-v5-c-card__title"><h2 class="pf-v5-c-card__title-text">Control Plane</h2></div>
+                        <div class="pf-v5-c-card__body" id="cp-body">
+                            <div class="pf-v5-u-text-align-center pf-v5-u-py-md"><span class="pf-v5-c-spinner pf-m-md" role="progressbar"><span class="pf-v5-c-spinner__clipper"></span><span class="pf-v5-c-spinner__lead-ball"></span><span class="pf-v5-c-spinner__tail-ball"></span></span></div>
+                        </div>
+                    </div>
+                    <div class="pf-v5-c-card status-card" id="ops-card">
+                        <div class="pf-v5-c-card__title"><h2 class="pf-v5-c-card__title-text">Operators</h2></div>
+                        <div class="pf-v5-c-card__body" id="ops-body">
+                            <div class="pf-v5-u-text-align-center pf-v5-u-py-md"><span class="pf-v5-c-spinner pf-m-md" role="progressbar"><span class="pf-v5-c-spinner__clipper"></span><span class="pf-v5-c-spinner__lead-ball"></span><span class="pf-v5-c-spinner__tail-ball"></span></span></div>
+                        </div>
+                    </div>
+                    <div class="pf-v5-c-card status-card" id="odf-card">
+                        <div class="pf-v5-c-card__title"><h2 class="pf-v5-c-card__title-text">ODF Storage</h2></div>
+                        <div class="pf-v5-c-card__body" id="odf-body">
+                            <div class="pf-v5-u-text-align-center pf-v5-u-py-md"><span class="pf-v5-c-spinner pf-m-md" role="progressbar"><span class="pf-v5-c-spinner__clipper"></span><span class="pf-v5-c-spinner__lead-ball"></span><span class="pf-v5-c-spinner__tail-ball"></span></span></div>
+                        </div>
+                    </div>
+                    <div class="pf-v5-c-card status-card" id="etcd-card">
+                        <div class="pf-v5-c-card__title"><h2 class="pf-v5-c-card__title-text">Etcd</h2></div>
+                        <div class="pf-v5-c-card__body" id="etcd-body">
+                            <div class="pf-v5-u-text-align-center pf-v5-u-py-md"><span class="pf-v5-c-spinner pf-m-md" role="progressbar"><span class="pf-v5-c-spinner__clipper"></span><span class="pf-v5-c-spinner__lead-ball"></span><span class="pf-v5-c-spinner__tail-ball"></span></span></div>
+                        </div>
+                    </div>
+                </div>
+
+                <h2 class="pf-v5-u-mb-md pf-v5-u-mt-lg status-section-heading">Node Utilization</h2>
+                <div class="pf-v5-c-card status-card pf-v5-u-mb-lg">
+                    <div class="pf-v5-c-card__body" id="node-util-body">
+                        <div class="pf-v5-u-text-align-center pf-v5-u-py-md"><span class="pf-v5-c-spinner pf-m-md" role="progressbar"><span class="pf-v5-c-spinner__clipper"></span><span class="pf-v5-c-spinner__lead-ball"></span><span class="pf-v5-c-spinner__tail-ball"></span></span></div>
+                    </div>
+                </div>
+
+                <h2 class="pf-v5-u-mb-md pf-v5-u-mt-lg status-section-heading">Top Consumers</h2>
+                <div class="pf-v5-l-grid pf-m-gutter pf-m-all-12-col pf-m-all-6-col-on-lg pf-v5-u-mb-lg">
+                    <div class="pf-v5-c-card status-card">
+                        <div class="pf-v5-c-card__title"><h2 class="pf-v5-c-card__title-text">Top Pods</h2></div>
+                        <div class="pf-v5-c-card__body" id="top-pods-body">
+                            <div class="pf-v5-u-text-align-center pf-v5-u-py-md"><span class="pf-v5-c-spinner pf-m-md" role="progressbar"><span class="pf-v5-c-spinner__clipper"></span><span class="pf-v5-c-spinner__lead-ball"></span><span class="pf-v5-c-spinner__tail-ball"></span></span></div>
+                        </div>
+                    </div>
+                    <div class="pf-v5-c-card status-card" style="display:none;" id="top-vms-card">
+                        <div class="pf-v5-c-card__title"><h2 class="pf-v5-c-card__title-text">Top Virtual Machines</h2></div>
+                        <div class="pf-v5-c-card__body" id="top-vms-body">
+                            <div class="pf-v5-u-text-align-center pf-v5-u-py-md"><span class="pf-v5-c-spinner pf-m-md" role="progressbar"><span class="pf-v5-c-spinner__clipper"></span><span class="pf-v5-c-spinner__lead-ball"></span><span class="pf-v5-c-spinner__tail-ball"></span></span></div>
+                        </div>
+                    </div>
+                </div>
+                <h2 class="pf-v5-u-mb-md pf-v5-u-mt-lg status-section-heading">Storage Classes</h2>
+                <div class="pf-v5-c-card status-card pf-v5-u-mb-lg">
+                    <div class="pf-v5-c-card__body" id="storageclasses-body">
+                        <div class="pf-v5-u-text-align-center pf-v5-u-py-md"><span class="pf-v5-c-spinner pf-m-md" role="progressbar"><span class="pf-v5-c-spinner__clipper"></span><span class="pf-v5-c-spinner__lead-ball"></span><span class="pf-v5-c-spinner__tail-ball"></span></span></div>
+                    </div>
+                </div>
+
+                <div id="networks-section" class="hidden">
+                    <h2 class="pf-v5-u-mb-md pf-v5-u-mt-lg status-section-heading">NMState Networks</h2>
+                    <div class="pf-v5-c-card status-card pf-v5-u-mb-lg">
+                        <div class="pf-v5-c-card__body" id="networks-body">
+                            <div class="pf-v5-u-text-align-center pf-v5-u-py-md"><span class="pf-v5-c-spinner pf-m-md" role="progressbar"><span class="pf-v5-c-spinner__clipper"></span><span class="pf-v5-c-spinner__lead-ball"></span><span class="pf-v5-c-spinner__tail-ball"></span></span></div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+        <footer class="app-footer">This is a community application and is not supported by Red Hat. {{if .Version}}<span style="float:right;opacity:0.6;">v{{.Version}}</span>{{end}}</footer>
+    </div>
+    <script src="/static/status.js"></script>
+</body>
+</html>
