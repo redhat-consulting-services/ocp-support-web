@@ -120,7 +120,25 @@ func (m *Manager) StartGather(gatherType GatherType, anonymize bool, since strin
 	if since != "" && !validSince.MatchString(since) {
 		since = ""
 	}
-	id := sanitizeID(fmt.Sprintf("%s-%d", gatherType, time.Now().UnixMilli()))
+	// Map to safe prefix via switch — breaks taint from user input for CodeQL.
+	var prefix string
+	switch gatherType {
+	case GatherDefault:
+		prefix = "default"
+	case GatherVirtualization:
+		prefix = "virtualization"
+	case GatherODF:
+		prefix = "odf"
+	case GatherAudit:
+		prefix = "audit"
+	case GatherAll:
+		prefix = "all"
+	case GatherEtcdBackup:
+		prefix = "etcd-backup"
+	default:
+		prefix = "unknown"
+	}
+	id := fmt.Sprintf("%s-%d", prefix, time.Now().UnixMilli())
 	job := &Job{
 		ID:        id,
 		Type:      gatherType,
@@ -445,9 +463,9 @@ func (m *Manager) runEtcdBackup(job *Job) {
 
 	safeID := sanitizeID(job.ID)
 	tarFile := filepath.Join(m.workDir, safeID+".tar.gz")
-	copyScript := fmt.Sprintf(`chroot /host /bin/bash -c 'cat <(cd %q && tar czf - .)'`, backupDir)
 
-	copyCmd := exec.Command("oc", "debug", "node/"+masterNode, "--", "/bin/bash", "-c", copyScript)
+	copyCmd := exec.Command("oc", "debug", "node/"+masterNode, "--",
+		"/bin/bash", "-c", `chroot /host tar czf - -C "$1" .`, "--", backupDir)
 	outFile, err := os.Create(tarFile)
 	if err != nil {
 		m.setError(job, fmt.Sprintf("create output file: %v", err))
@@ -473,8 +491,8 @@ func (m *Manager) runEtcdBackup(job *Job) {
 
 	m.appendLog(job, fmt.Sprintf("Backup archive created: %s (%.1f MB)", filepath.Base(tarFile), float64(info.Size())/(1024*1024)))
 
-	cleanupScript := fmt.Sprintf(`chroot /host rm -rf %q`, backupDir)
-	cleanupCmd := exec.Command("oc", "debug", "node/"+masterNode, "--", "/bin/bash", "-c", cleanupScript)
+	cleanupCmd := exec.Command("oc", "debug", "node/"+masterNode, "--",
+		"/bin/bash", "-c", `chroot /host rm -rf "$1"`, "--", backupDir)
 	_ = cleanupCmd.Run()
 
 	m.mu.Lock()
@@ -530,8 +548,37 @@ func (m *Manager) getEtcdPodName() (string, error) {
 	return name, nil
 }
 
+// AllowedDiagObjects is the set of resource types permitted for drill-down diagnostics.
+var AllowedDiagObjects = map[string]bool{
+	"secrets": true, "configmaps": true, "events": true, "events.events.k8s.io": true,
+	"pods": true, "deployments": true, "replicasets": true, "statefulsets": true,
+	"daemonsets": true, "jobs": true, "cronjobs": true,
+	"services": true, "endpoints": true, "ingresses": true, "routes": true,
+	"persistentvolumeclaims": true, "persistentvolumes": true,
+	"serviceaccounts": true, "roles": true, "rolebindings": true,
+	"clusterroles": true, "clusterrolebindings": true,
+	"namespaces": true, "nodes": true,
+	"virtualmachines": true, "virtualmachineinstances": true,
+}
+
 func (m *Manager) StartDiag(diagType, objectType string) string {
-	id := sanitizeID(fmt.Sprintf("diag-%s-%d", diagType, time.Now().UnixMilli()))
+	// Map to safe prefix via switch — breaks taint from user input for CodeQL.
+	var prefix string
+	switch diagType {
+	case "object-sizes":
+		prefix = "diag-object-sizes"
+	case "object-counts":
+		prefix = "diag-object-counts"
+	case "ns-breakdown":
+		prefix = "diag-ns-breakdown"
+	case "creation-timeline":
+		prefix = "diag-creation-timeline"
+	case "ns-object-counts":
+		prefix = "diag-ns-object-counts"
+	default:
+		prefix = "diag-unknown"
+	}
+	id := fmt.Sprintf("%s-%d", prefix, time.Now().UnixMilli())
 	dj := &DiagJob{
 		ID:        id,
 		Type:      diagType,
@@ -559,6 +606,12 @@ func (m *Manager) GetDiagJob(id string) *DiagJob {
 }
 
 func (m *Manager) runDiag(dj *DiagJob, objectType string) {
+	// Validate objectType against allowlist locally (breaks taint chain for CodeQL).
+	var safeObjectType string
+	if AllowedDiagObjects[objectType] {
+		safeObjectType = objectType
+	}
+
 	podName, err := m.getEtcdPodName()
 	if err != nil {
 		m.setDiagError(dj, err.Error())
@@ -574,13 +627,13 @@ func (m *Manager) runDiag(dj *DiagJob, objectType string) {
 	case "ns-breakdown":
 		script = `etcdctl get / --prefix --keys-only | grep -oE -e "^/kubernetes.io/secrets/[-a-z|.0-9]*/" -e "^/kubernetes.io/configmaps/[-a-z|.0-9]*/" -e "^/kubernetes.io/events/[-a-z|.0-9]*/" | sort -u | while read KEY; do printf "$KEY\t" && etcdctl get ${KEY##* } --prefix --print-value-only | wc -c | numfmt --to=iec ; done | sort -k2 -hr | head -50 | awk -F'/' 'BEGIN{print "NAMESPACE TYPE SIZE"}{print $4" "$3" "$5}' | column -t`
 	case "creation-timeline":
-		if objectType == "" {
-			m.setDiagError(dj, "object type is required")
+		if safeObjectType == "" {
+			m.setDiagError(dj, "invalid or missing object type")
 			return
 		}
 	case "ns-object-counts":
-		if objectType == "" {
-			m.setDiagError(dj, "object type is required")
+		if safeObjectType == "" {
+			m.setDiagError(dj, "invalid or missing object type")
 			return
 		}
 	default:
@@ -591,14 +644,13 @@ func (m *Manager) runDiag(dj *DiagJob, objectType string) {
 	var cmd *exec.Cmd
 	switch dj.Type {
 	case "creation-timeline":
-		// objectType is validated by allowlist in the handler
 		cmd = exec.Command("bash", "-c",
 			`OBJ="$1"; echo "=== By Month ===" && oc get "$OBJ" -A -o 'jsonpath={range .items[*]}{.metadata.creationTimestamp}{"\n"}{end}' | grep -oE "[0-9]{4}-[0-9]{2}" | sort | uniq -c && echo "" && echo "=== By Day ===" && oc get "$OBJ" -A -o 'jsonpath={range .items[*]}{.metadata.creationTimestamp}{"\n"}{end}' | grep -oE "[0-9]{4}-[0-9]{2}-[0-9]{2}" | sort | uniq -c && echo "" && echo "=== By Hour ===" && oc get "$OBJ" -A -o 'jsonpath={range .items[*]}{.metadata.creationTimestamp}{"\n"}{end}' | grep -oE "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}" | sort | uniq -c`,
-			"--", objectType)
+			"--", safeObjectType)
 	case "ns-object-counts":
 		cmd = exec.Command("bash", "-c",
 			`oc get "$1" -A --no-headers -o custom-columns=NS:.metadata.namespace 2>/dev/null | sort | uniq -c | sort -rn | head -50`,
-			"--", objectType)
+			"--", safeObjectType)
 	default:
 		cmd = exec.Command("oc", "exec", "-n", "openshift-etcd", "-c", "etcdctl", podName, "--",
 			"sh", "-c", script)
