@@ -18,7 +18,6 @@ import (
 
 const gatherTimeout = 30 * time.Minute
 
-var validObjectType = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9./-]*$`)
 var validSince = regexp.MustCompile(`^[0-9]+h$`)
 var validJobIDPattern = regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
 var validBackupDir = regexp.MustCompile(`^/home/core/etcd-backup-[0-9-]+$`)
@@ -560,11 +559,6 @@ func (m *Manager) GetDiagJob(id string) *DiagJob {
 }
 
 func (m *Manager) runDiag(dj *DiagJob, objectType string) {
-	if objectType != "" && !validObjectType.MatchString(objectType) {
-		m.setDiagError(dj, "invalid object type: must be alphanumeric with dots, dashes, or slashes")
-		return
-	}
-
 	podName, err := m.getEtcdPodName()
 	if err != nil {
 		m.setDiagError(dj, err.Error())
@@ -597,7 +591,7 @@ func (m *Manager) runDiag(dj *DiagJob, objectType string) {
 	var cmd *exec.Cmd
 	switch dj.Type {
 	case "creation-timeline":
-		// objectType is validated by validObjectType regex above
+		// objectType is validated by allowlist in the handler
 		cmd = exec.Command("bash", "-c",
 			`OBJ="$1"; echo "=== By Month ===" && oc get "$OBJ" -A -o 'jsonpath={range .items[*]}{.metadata.creationTimestamp}{"\n"}{end}' | grep -oE "[0-9]{4}-[0-9]{2}" | sort | uniq -c && echo "" && echo "=== By Day ===" && oc get "$OBJ" -A -o 'jsonpath={range .items[*]}{.metadata.creationTimestamp}{"\n"}{end}' | grep -oE "[0-9]{4}-[0-9]{2}-[0-9]{2}" | sort | uniq -c && echo "" && echo "=== By Hour ===" && oc get "$OBJ" -A -o 'jsonpath={range .items[*]}{.metadata.creationTimestamp}{"\n"}{end}' | grep -oE "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}" | sort | uniq -c`,
 			"--", objectType)

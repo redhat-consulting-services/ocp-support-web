@@ -316,7 +316,7 @@
 
     // --- Etcd Diagnostics ---
     const diagResults = document.getElementById('diag-results');
-    const diagObjectInput = document.getElementById('diag-object-type');
+    const diagObjectSelect = document.getElementById('diag-object-type');
     let diagCounter = 0;
 
     document.querySelectorAll('.diag-btn').forEach(btn => {
@@ -331,11 +331,11 @@
         const needsObject = (type === 'creation-timeline' || type === 'ns-object-counts');
         let objectType = '';
         if (needsObject) {
-            objectType = diagObjectInput.value.trim();
+            objectType = diagObjectSelect.value;
             if (!objectType) {
-                diagObjectInput.focus();
-                diagObjectInput.style.borderColor = '#c9190b';
-                setTimeout(() => diagObjectInput.style.borderColor = '', 2000);
+                diagObjectSelect.focus();
+                diagObjectSelect.style.borderColor = '#c9190b';
+                setTimeout(() => diagObjectSelect.style.borderColor = '', 2000);
                 return;
             }
         }

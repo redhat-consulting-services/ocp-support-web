@@ -196,9 +196,22 @@ func (h *Handler) handleStartDiag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if (req.Type == "creation-timeline" || req.Type == "ns-object-counts") && req.ObjectType == "" {
-		jsonError(w, "objectType is required for this diagnostic", 400)
-		return
+	if req.Type == "creation-timeline" || req.Type == "ns-object-counts" {
+		allowedObjects := map[string]bool{
+			"secrets": true, "configmaps": true, "events": true, "events.events.k8s.io": true,
+			"pods": true, "deployments": true, "replicasets": true, "statefulsets": true,
+			"daemonsets": true, "jobs": true, "cronjobs": true,
+			"services": true, "endpoints": true, "ingresses": true, "routes": true,
+			"persistentvolumeclaims": true, "persistentvolumes": true,
+			"serviceaccounts": true, "roles": true, "rolebindings": true,
+			"clusterroles": true, "clusterrolebindings": true,
+			"namespaces": true, "nodes": true,
+			"virtualmachines": true, "virtualmachineinstances": true,
+		}
+		if !allowedObjects[req.ObjectType] {
+			jsonError(w, "invalid or unsupported resource type", 400)
+			return
+		}
 	}
 
 	id := h.mg.StartDiag(req.Type, req.ObjectType)
