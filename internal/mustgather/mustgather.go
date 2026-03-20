@@ -20,6 +20,8 @@ const gatherTimeout = 30 * time.Minute
 
 var validObjectType = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9./-]*$`)
 var validSince = regexp.MustCompile(`^[0-9]+h$`)
+var validJobIDPattern = regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
+var validBackupDir = regexp.MustCompile(`^/home/core/etcd-backup-[0-9-]+$`)
 
 type GatherType string
 
@@ -106,11 +108,20 @@ func (m *Manager) ListJobs() []*Job {
 	return jobs
 }
 
+// sanitizeID ensures a job ID is safe for use in file paths.
+func sanitizeID(id string) string {
+	id = filepath.Base(id)
+	if !validJobIDPattern.MatchString(id) {
+		return "invalid"
+	}
+	return id
+}
+
 func (m *Manager) StartGather(gatherType GatherType, anonymize bool, since string) string {
 	if since != "" && !validSince.MatchString(since) {
 		since = ""
 	}
-	id := fmt.Sprintf("%s-%d", gatherType, time.Now().UnixMilli())
+	id := sanitizeID(fmt.Sprintf("%s-%d", gatherType, time.Now().UnixMilli()))
 	job := &Job{
 		ID:        id,
 		Type:      gatherType,
@@ -424,11 +435,17 @@ func (m *Manager) runEtcdBackup(job *Job) {
 		m.setError(job, "could not determine backup directory from output")
 		return
 	}
+	backupDir = strings.TrimSpace(backupDir)
+	if !validBackupDir.MatchString(backupDir) {
+		m.setError(job, "unexpected backup directory path")
+		return
+	}
 
 	m.setStep(job, 3, totalSteps, "Copying backup files")
 	m.appendLog(job, "=== Step 3/3: Copying backup files from node ===")
 
-	tarFile := filepath.Join(m.workDir, job.ID+".tar.gz")
+	safeID := sanitizeID(job.ID)
+	tarFile := filepath.Join(m.workDir, safeID+".tar.gz")
 	copyScript := fmt.Sprintf(`chroot /host /bin/bash -c 'cat <(cd %q && tar czf - .)'`, backupDir)
 
 	copyCmd := exec.Command("oc", "debug", "node/"+masterNode, "--", "/bin/bash", "-c", copyScript)
@@ -472,9 +489,14 @@ func (m *Manager) runEtcdBackup(job *Job) {
 }
 
 func (m *Manager) fallbackAnonymize(dir string) error {
-	sedCmd := exec.Command("bash", "-c",
-		fmt.Sprintf(`find %q -type f \( -name "*.log" -o -name "*.yaml" -o -name "*.json" -o -name "*.txt" \) -exec sed -i -E 's/\b([0-9]{1,3}\.){3}[0-9]{1,3}\b/x.x.x.x/g' {} +`, dir))
-	return sedCmd.Run()
+	dir = filepath.Clean(dir)
+	if !strings.HasPrefix(dir, m.workDir) {
+		return fmt.Errorf("directory outside work dir")
+	}
+	findCmd := exec.Command("find", dir, "-type", "f",
+		"(", "-name", "*.log", "-o", "-name", "*.yaml", "-o", "-name", "*.json", "-o", "-name", "*.txt", ")",
+		"-exec", "sed", "-i", "-E", `s/\b([0-9]{1,3}\.){3}[0-9]{1,3}\b/x.x.x.x/g`, "{}", "+")
+	return findCmd.Run()
 }
 
 func (m *Manager) setError(job *Job, msg string) {
@@ -510,7 +532,7 @@ func (m *Manager) getEtcdPodName() (string, error) {
 }
 
 func (m *Manager) StartDiag(diagType, objectType string) string {
-	id := fmt.Sprintf("diag-%s-%d", diagType, time.Now().UnixMilli())
+	id := sanitizeID(fmt.Sprintf("diag-%s-%d", diagType, time.Now().UnixMilli()))
 	dj := &DiagJob{
 		ID:        id,
 		Type:      diagType,
@@ -562,24 +584,28 @@ func (m *Manager) runDiag(dj *DiagJob, objectType string) {
 			m.setDiagError(dj, "object type is required")
 			return
 		}
-		script = fmt.Sprintf(`echo "=== By Month ===" && oc get %s -A -o jsonpath='{range .items[*]}{.metadata.creationTimestamp}{"\n"}{end}' | grep -oE "[0-9]{4}-[0-9]{2}" | sort | uniq -c && echo "" && echo "=== By Day ===" && oc get %s -A -o jsonpath='{range .items[*]}{.metadata.creationTimestamp}{"\n"}{end}' | grep -oE "[0-9]{4}-[0-9]{2}-[0-9]{2}" | sort | uniq -c && echo "" && echo "=== By Hour ===" && oc get %s -A -o jsonpath='{range .items[*]}{.metadata.creationTimestamp}{"\n"}{end}' | grep -oE "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}" | sort | uniq -c`,
-			objectType, objectType, objectType)
 	case "ns-object-counts":
 		if objectType == "" {
 			m.setDiagError(dj, "object type is required")
 			return
 		}
-		script = fmt.Sprintf(`oc get %s -A --no-headers -o custom-columns=NS:.metadata.namespace 2>/dev/null | sort | uniq -c | sort -rn | head -50`,
-			objectType)
 	default:
 		m.setDiagError(dj, "unknown diagnostic type: "+dj.Type)
 		return
 	}
 
 	var cmd *exec.Cmd
-	if dj.Type == "creation-timeline" || dj.Type == "ns-object-counts" {
-		cmd = exec.Command("bash", "-c", script)
-	} else {
+	switch dj.Type {
+	case "creation-timeline":
+		// objectType is validated by validObjectType regex above
+		cmd = exec.Command("bash", "-c",
+			`OBJ="$1"; echo "=== By Month ===" && oc get "$OBJ" -A -o 'jsonpath={range .items[*]}{.metadata.creationTimestamp}{"\n"}{end}' | grep -oE "[0-9]{4}-[0-9]{2}" | sort | uniq -c && echo "" && echo "=== By Day ===" && oc get "$OBJ" -A -o 'jsonpath={range .items[*]}{.metadata.creationTimestamp}{"\n"}{end}' | grep -oE "[0-9]{4}-[0-9]{2}-[0-9]{2}" | sort | uniq -c && echo "" && echo "=== By Hour ===" && oc get "$OBJ" -A -o 'jsonpath={range .items[*]}{.metadata.creationTimestamp}{"\n"}{end}' | grep -oE "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}" | sort | uniq -c`,
+			"--", objectType)
+	case "ns-object-counts":
+		cmd = exec.Command("bash", "-c",
+			`oc get "$1" -A --no-headers -o custom-columns=NS:.metadata.namespace 2>/dev/null | sort | uniq -c | sort -rn | head -50`,
+			"--", objectType)
+	default:
 		cmd = exec.Command("oc", "exec", "-n", "openshift-etcd", "-c", "etcdctl", podName, "--",
 			"sh", "-c", script)
 	}
