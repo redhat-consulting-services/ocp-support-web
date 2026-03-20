@@ -80,6 +80,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 		mux.HandleFunc("GET /api/status/top", h.handleTopConsumers)
 		mux.HandleFunc("GET /api/status/networks", h.handleNetworks)
 		mux.HandleFunc("GET /api/status/storageclasses", h.handleStorageClasses)
+		mux.HandleFunc("GET /api/status/gpus", h.handleGPUNodes)
 		if h.mon != nil {
 			mux.HandleFunc("GET /api/status/etcd", h.handleEtcdHealth)
 		}
@@ -116,6 +117,7 @@ func (h *Handler) handleStartGather(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Type      string `json:"type"`
 		Anonymize bool   `json:"anonymize"`
+		Since     string `json:"since"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, "invalid request body", 400)
@@ -132,7 +134,7 @@ func (h *Handler) handleStartGather(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id := h.mg.StartGather(gatherType, req.Anonymize)
+	id := h.mg.StartGather(gatherType, req.Anonymize, req.Since)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"id": id, "status": "running"})
 }
@@ -194,8 +196,8 @@ func (h *Handler) handleStartDiag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if (req.Type == "creation-timeline" || req.Type == "ns-object-counts") && req.ObjectType == "" {
-		jsonError(w, "objectType is required for this diagnostic", 400)
+	if (req.Type == "creation-timeline" || req.Type == "ns-object-counts") && !mustgather.AllowedDiagObjects[req.ObjectType] {
+		jsonError(w, "invalid or unsupported resource type", 400)
 		return
 	}
 
@@ -250,6 +252,17 @@ func (h *Handler) handleNodeUtilization(w http.ResponseWriter, r *http.Request) 
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(nodes)
+}
+
+func (h *Handler) handleGPUNodes(w http.ResponseWriter, r *http.Request) {
+	gpus, err := h.st.GetGPUNodes()
+	if err != nil {
+		log.Printf("gpu nodes error: %v", err)
+		jsonError(w, "failed to get GPU nodes", 500)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(gpus)
 }
 
 func (h *Handler) handleTopConsumers(w http.ResponseWriter, r *http.Request) {

@@ -1,4 +1,10 @@
 (function() {
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
     const jobsContainer = document.getElementById('jobs-container');
     const jobsEmpty = document.getElementById('jobs-empty');
     let pollInterval = null;
@@ -16,6 +22,29 @@
         });
     });
     document.querySelector('#anonymize-toggle [data-anon="false"]').classList.add('pf-m-selected');
+
+    // Since (time frame) toggle
+    let sinceEnabled = false;
+    const sinceSelect = document.getElementById('since-select');
+    const sinceHint = document.getElementById('since-hint');
+    document.querySelectorAll('#since-toggle [data-since-enabled]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            sinceEnabled = btn.dataset.sinceEnabled === 'true';
+            document.querySelectorAll('#since-toggle .pf-v5-c-toggle-group__button').forEach(b => b.classList.remove('pf-m-selected'));
+            btn.classList.add('pf-m-selected');
+            sinceSelect.disabled = !sinceEnabled;
+            updateSinceHint();
+        });
+    });
+    sinceSelect.addEventListener('change', updateSinceHint);
+    function updateSinceHint() {
+        if (!sinceEnabled) {
+            sinceHint.textContent = 'Collect all logs (no time limit)';
+        } else {
+            const val = sinceSelect.value;
+            sinceHint.textContent = 'Only collect logs from the last ' + val.replace('h', ' hours');
+        }
+    }
 
     // Gather type card selection
     let selectedType = 'default';
@@ -35,11 +64,12 @@
         startBtn.disabled = true;
         startBtn.textContent = 'Starting...';
         const anonymize = anonymizeEnabled;
+        const since = sinceEnabled ? sinceSelect.value : '';
         try {
             const res = await fetch('/api/support/gather', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({type, anonymize})
+                body: JSON.stringify({type, anonymize, since})
             });
             const data = await res.json();
             if (data.error) {
@@ -47,7 +77,7 @@
                 return;
             }
             activeJobs[data.id] = true;
-            addJobCard(data.id, type, anonymize);
+            addJobCard(data.id, type, anonymize, since);
             startPolling();
         } catch (e) {
             alert('Failed to start gather: ' + e.message);
@@ -79,10 +109,13 @@
         return s + 's';
     }
 
-    function addJobCard(id, type, anonymize) {
+    function addJobCard(id, type, anonymize, since) {
         jobsEmpty.classList.add('hidden');
         if (document.getElementById('job-' + id)) return;
 
+        const safeId = escapeHtml(id);
+        const safeLabel = escapeHtml(labelFor(type));
+        const sinceLabel = since ? ' (' + escapeHtml(since.replace('h', ' hours')) + ')' : '';
         const card = document.createElement('div');
         card.id = 'job-' + id;
         card.className = 'pf-v5-c-card pf-v5-u-mb-md';
@@ -90,26 +123,26 @@
             <div class="pf-v5-c-card__title">
                 <div class="pf-v5-l-flex pf-m-justify-content-space-between pf-m-align-items-center">
                     <div class="pf-v5-l-flex pf-m-gap-sm pf-m-align-items-center">
-                        <h3 class="pf-v5-c-card__title-text">${labelFor(type)}${anonymize ? ' (anonymized)' : ''}</h3>
-                        <span class="pf-v5-c-label pf-m-blue" id="status-${id}">
+                        <h3 class="pf-v5-c-card__title-text">${safeLabel}${anonymize ? ' (anonymized)' : ''}${sinceLabel}</h3>
+                        <span class="pf-v5-c-label pf-m-blue" id="status-${safeId}">
                             <span class="pf-v5-c-label__content">Running</span>
                         </span>
-                        <span class="pf-v5-u-font-size-sm pf-v5-u-color-200" id="elapsed-${id}"></span>
+                        <span class="pf-v5-u-font-size-sm pf-v5-u-color-200" id="elapsed-${safeId}"></span>
                     </div>
-                    <div id="actions-${id}" class="hidden"></div>
+                    <div id="actions-${safeId}" class="hidden"></div>
                 </div>
             </div>
             <div class="pf-v5-c-card__body">
-                <div class="pf-v5-u-mb-sm pf-v5-u-font-size-sm" id="step-label-${id}">Initializing...</div>
-                <div class="pf-v5-c-progress pf-v5-u-mb-md" id="progress-${id}">
-                    <div class="pf-v5-c-progress__description" id="progress-text-${id}"></div>
+                <div class="pf-v5-u-mb-sm pf-v5-u-font-size-sm" id="step-label-${safeId}">Initializing...</div>
+                <div class="pf-v5-c-progress pf-v5-u-mb-md" id="progress-${safeId}">
+                    <div class="pf-v5-c-progress__description" id="progress-text-${safeId}"></div>
                     <div class="pf-v5-c-progress__bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-                        <div class="pf-v5-c-progress__indicator" id="progress-bar-${id}" style="width: 0%; transition: width 0.5s ease;">
-                            <span class="pf-v5-c-progress__measure" id="progress-pct-${id}"></span>
+                        <div class="pf-v5-c-progress__indicator" id="progress-bar-${safeId}" style="width: 0%; transition: width 0.5s ease;">
+                            <span class="pf-v5-c-progress__measure" id="progress-pct-${safeId}"></span>
                         </div>
                     </div>
                 </div>
-                <pre class="pf-v5-u-font-size-xs" id="log-${id}" style="max-height:300px;overflow-y:auto;background:#1b1d21;color:#d2d2d2;padding:10px;border-radius:4px;white-space:pre-wrap;font-family:'Red Hat Mono',monospace;line-height:1.4;"></pre>
+                <pre class="pf-v5-u-font-size-xs" id="log-${safeId}" style="max-height:300px;overflow-y:auto;background:#1b1d21;color:#d2d2d2;padding:10px;border-radius:4px;white-space:pre-wrap;font-family:'Red Hat Mono',monospace;line-height:1.4;"></pre>
             </div>`;
         jobsContainer.prepend(card);
     }
@@ -194,7 +227,7 @@
             actionsEl.classList.remove('hidden');
             actionsEl.innerHTML = `<a href="/api/support/gather/${encodeURIComponent(job.id)}/download" class="pf-v5-c-button pf-m-primary" style="display:inline-flex;align-items:center;gap:6px;">
                 <svg style="width:16px;height:16px;fill:currentColor" viewBox="0 0 16 16"><path d="M8 1a.5.5 0 0 1 .5.5v8.793l2.146-2.147a.5.5 0 0 1 .708.708l-3 3a.5.5 0 0 1-.708 0l-3-3a.5.5 0 1 1 .708-.708L7.5 10.293V1.5A.5.5 0 0 1 8 1z"/><path d="M2 13.5a.5.5 0 0 1 .5-.5h11a.5.5 0 0 1 0 1h-11a.5.5 0 0 1-.5-.5z"/></svg>
-                Download ${labelFor(job.type)}</a>`;
+                Download ${escapeHtml(labelFor(job.type))}</a>`;
         } else if (job.status === 'failed') {
             statusEl.className = 'pf-v5-c-label pf-m-red';
             statusEl.innerHTML = '<span class="pf-v5-c-label__content">Failed</span>';
@@ -217,7 +250,7 @@
             jobsEmpty.classList.add('hidden');
             jobs.sort((a, b) => new Date(b.startedAt) - new Date(a.startedAt));
             for (const job of jobs) {
-                addJobCard(job.id, job.type, job.anonymize);
+                addJobCard(job.id, job.type, job.anonymize, job.since);
                 updateJobUI(job);
                 if (job.status === 'running') {
                     activeJobs[job.id] = true;
@@ -250,7 +283,7 @@
                     return;
                 }
                 activeJobs[data.id] = true;
-                addJobCard(data.id, 'etcd-backup', false);
+                addJobCard(data.id, 'etcd-backup', false, '');
                 startPolling();
             } catch (e) {
                 alert('Failed to start etcd backup: ' + e.message);
@@ -291,7 +324,7 @@
 
     // --- Etcd Diagnostics ---
     const diagResults = document.getElementById('diag-results');
-    const diagObjectInput = document.getElementById('diag-object-type');
+    const diagObjectSelect = document.getElementById('diag-object-type');
     let diagCounter = 0;
 
     document.querySelectorAll('.diag-btn').forEach(btn => {
@@ -306,11 +339,11 @@
         const needsObject = (type === 'creation-timeline' || type === 'ns-object-counts');
         let objectType = '';
         if (needsObject) {
-            objectType = diagObjectInput.value.trim();
+            objectType = diagObjectSelect.value;
             if (!objectType) {
-                diagObjectInput.focus();
-                diagObjectInput.style.borderColor = '#c9190b';
-                setTimeout(() => diagObjectInput.style.borderColor = '', 2000);
+                diagObjectSelect.focus();
+                diagObjectSelect.style.borderColor = '#c9190b';
+                setTimeout(() => diagObjectSelect.style.borderColor = '', 2000);
                 return;
             }
         }
@@ -353,16 +386,22 @@
         placeholder.id = placeholderId;
         placeholder.className = 'pf-v5-c-card pf-v5-u-mb-md';
         placeholder.style.border = '1px solid #d2d2d2';
-        placeholder.innerHTML = `<div class="pf-v5-c-card__title"><h3 class="pf-v5-c-card__title-text">${title}</h3></div>
+        placeholder.innerHTML = `<div class="pf-v5-c-card__title"><h3 class="pf-v5-c-card__title-text">${escapeHtml(title)}</h3></div>
             <div class="pf-v5-c-card__body pf-v5-u-text-align-center pf-v5-u-py-lg">
                 <span class="pf-v5-c-spinner pf-m-md" role="progressbar"><span class="pf-v5-c-spinner__clipper"></span><span class="pf-v5-c-spinner__lead-ball"></span><span class="pf-v5-c-spinner__tail-ball"></span></span>
                 <p class="pf-v5-u-mt-sm pf-v5-u-font-size-sm">Running diagnostic... This may take a few minutes on large clusters.</p>
             </div>`;
         diagResults.prepend(placeholder);
 
+        let notFoundRetries = 0;
         const poll = async () => {
             try {
                 const res = await fetch('/api/support/etcd-diag/' + encodeURIComponent(id));
+                if (res.status === 404 && notFoundRetries < 3) {
+                    notFoundRetries++;
+                    setTimeout(poll, 3000);
+                    return;
+                }
                 const dj = await res.json();
                 if (dj.status === 'running') {
                     setTimeout(poll, 2000);
@@ -374,7 +413,7 @@
                 if (dj.status === 'complete') {
                     showDiagResult(type, objectType, dj.output, null);
                 } else {
-                    showDiagResult(type, objectType, dj.output, dj.error);
+                    showDiagResult(type, objectType, dj.output, dj.error || 'job not found');
                 }
             } catch (e) {
                 restoreBtn();
@@ -419,10 +458,10 @@
 
         card.innerHTML = `<div class="pf-v5-c-card__title">
                 <div class="pf-v5-l-flex pf-m-justify-content-space-between pf-m-align-items-center">
-                    <h3 class="pf-v5-c-card__title-text">${title}</h3>
+                    <h3 class="pf-v5-c-card__title-text">${escapeHtml(title)}</h3>
                     <div class="pf-v5-l-flex pf-m-gap-sm">
-                        ${output ? `<button class="pf-v5-c-button pf-m-secondary pf-m-small" onclick="copyDiagOutput('${resultId}')">Copy</button>
-                        <button class="pf-v5-c-button pf-m-secondary pf-m-small" onclick="saveDiagOutput('${resultId}', '${type}')">Save .txt</button>` : ''}
+                        ${output ? `<button class="pf-v5-c-button pf-m-secondary pf-m-small" onclick="copyDiagOutput('${escapeHtml(resultId)}')">Copy</button>
+                        <button class="pf-v5-c-button pf-m-secondary pf-m-small" onclick="saveDiagOutput('${escapeHtml(resultId)}', '${escapeHtml(type)}')">Save .txt</button>` : ''}
                         <button class="pf-v5-c-button pf-m-plain pf-m-small" onclick="this.closest('.pf-v5-c-card').remove()" title="Dismiss">&times;</button>
                     </div>
                 </div>

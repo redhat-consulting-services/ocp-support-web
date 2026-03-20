@@ -80,7 +80,7 @@
 
                         <hr class="pf-v5-c-divider" style="margin-bottom:32px;">
 
-                        <div class="pf-v5-l-flex pf-m-align-items-center pf-m-justify-content-space-between">
+                        <div class="pf-v5-l-flex pf-m-align-items-center pf-m-gap-lg pf-v5-u-mb-md" style="flex-wrap:wrap;">
                             <div class="pf-v5-l-flex pf-m-align-items-center pf-m-gap-sm">
                                 <span class="pf-v5-u-font-size-sm pf-v5-u-font-weight-bold">Anonymize:</span>
                                 <div class="pf-v5-c-toggle-group" id="anonymize-toggle">
@@ -97,6 +97,31 @@
                                 </div>
                                 <span class="pf-v5-u-font-size-sm pf-v5-u-color-200" id="anon-hint">Data will be sent as-is</span>
                             </div>
+                            <div class="pf-v5-l-flex pf-m-align-items-center pf-m-gap-sm">
+                                <span class="pf-v5-u-font-size-sm pf-v5-u-font-weight-bold">Time frame:</span>
+                                <div class="pf-v5-c-toggle-group" id="since-toggle">
+                                    <div class="pf-v5-c-toggle-group__item">
+                                        <button class="pf-v5-c-toggle-group__button pf-m-selected" data-since-enabled="false" type="button">
+                                            <span class="pf-v5-c-toggle-group__text">Off</span>
+                                        </button>
+                                    </div>
+                                    <div class="pf-v5-c-toggle-group__item">
+                                        <button class="pf-v5-c-toggle-group__button" data-since-enabled="true" type="button">
+                                            <span class="pf-v5-c-toggle-group__text">On</span>
+                                        </button>
+                                    </div>
+                                </div>
+                                <select class="pf-v5-c-form-control" id="since-select" disabled style="width:auto;min-width:100px;">
+                                    <option value="6h">Last 6 hours</option>
+                                    <option value="12h">Last 12 hours</option>
+                                    <option value="18h">Last 18 hours</option>
+                                    <option value="24h" selected>Last 24 hours</option>
+                                    <option value="48h">Last 48 hours</option>
+                                </select>
+                                <span class="pf-v5-u-font-size-sm pf-v5-u-color-200" id="since-hint">Collect all logs (no time limit)</span>
+                            </div>
+                        </div>
+                        <div class="pf-v5-l-flex pf-m-align-items-center pf-m-justify-content-flex-end">
                             <button class="pf-v5-c-button pf-m-primary" id="start-gather-btn">Start Gathering</button>
                         </div>
                     </div>
@@ -137,7 +162,48 @@
                                 <p class="pf-v5-u-font-size-xs pf-v5-u-color-200 pf-v5-u-mb-md">Pick a resource type from the overview results (e.g. <code>secrets</code>, <code>events</code>, <code>configmaps</code>) and investigate further.</p>
                                 <div class="pf-v5-u-mb-md">
                                     <label class="pf-v5-u-font-size-sm pf-v5-u-font-weight-bold pf-v5-u-mb-xs" for="diag-object-type" style="display:block;">Resource type</label>
-                                    <input class="pf-v5-c-form-control" type="text" id="diag-object-type" placeholder="e.g. secrets" style="width:100%;max-width:250px;">
+                                    <select class="pf-v5-c-form-control" id="diag-object-type" style="width:100%;max-width:250px;">
+                                        <option value="">-- Select resource --</option>
+                                        <optgroup label="Common">
+                                            <option value="secrets">secrets</option>
+                                            <option value="configmaps">configmaps</option>
+                                            <option value="events">events</option>
+                                            <option value="pods">pods</option>
+                                            <option value="services">services</option>
+                                            <option value="serviceaccounts">serviceaccounts</option>
+                                            <option value="endpoints">endpoints</option>
+                                        </optgroup>
+                                        <optgroup label="Workloads">
+                                            <option value="deployments">deployments</option>
+                                            <option value="replicasets">replicasets</option>
+                                            <option value="statefulsets">statefulsets</option>
+                                            <option value="daemonsets">daemonsets</option>
+                                            <option value="jobs">jobs</option>
+                                            <option value="cronjobs">cronjobs</option>
+                                        </optgroup>
+                                        <optgroup label="Networking">
+                                            <option value="ingresses">ingresses</option>
+                                            <option value="routes">routes</option>
+                                        </optgroup>
+                                        <optgroup label="Storage">
+                                            <option value="persistentvolumeclaims">persistentvolumeclaims</option>
+                                            <option value="persistentvolumes">persistentvolumes</option>
+                                        </optgroup>
+                                        <optgroup label="RBAC">
+                                            <option value="roles">roles</option>
+                                            <option value="rolebindings">rolebindings</option>
+                                            <option value="clusterroles">clusterroles</option>
+                                            <option value="clusterrolebindings">clusterrolebindings</option>
+                                        </optgroup>
+                                        <optgroup label="Cluster">
+                                            <option value="namespaces">namespaces</option>
+                                            <option value="nodes">nodes</option>
+                                        </optgroup>
+                                        <optgroup label="Virtualization">
+                                            <option value="virtualmachines">virtualmachines</option>
+                                            <option value="virtualmachineinstances">virtualmachineinstances</option>
+                                        </optgroup>
+                                    </select>
                                 </div>
                                 <div class="pf-v5-l-flex pf-m-column pf-m-gap-sm">
                                     <button class="pf-v5-c-button pf-m-secondary pf-m-small diag-btn" data-diag="creation-timeline" style="text-align:left;">

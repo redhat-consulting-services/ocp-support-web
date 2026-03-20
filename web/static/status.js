@@ -3,8 +3,8 @@
     async function loadClusterHealth() {
         try {
             const resp = await fetch('/api/status/cluster');
-            if (!resp.ok) throw new Error((await resp.json()).error);
             const data = await resp.json();
+            if (!resp.ok) throw new Error(data.error || 'request failed');
             renderCluster(data);
             renderControlPlane(data.controlPlane);
             renderOperators(data.operators);
@@ -94,8 +94,8 @@
     async function loadNodeUtilization() {
         try {
             const resp = await fetch('/api/status/nodes');
-            if (!resp.ok) throw new Error((await resp.json()).error);
             const nodes = await resp.json();
+            if (!resp.ok) throw new Error(nodes.error || 'request failed');
             renderNodeUtilization(nodes || []);
         } catch (e) {
             document.getElementById('node-util-body').innerHTML = errorMsg(e.message);
@@ -192,8 +192,8 @@
     async function loadTopConsumers() {
         try {
             const resp = await fetch('/api/status/top');
-            if (!resp.ok) throw new Error((await resp.json()).error);
             const data = await resp.json();
+            if (!resp.ok) throw new Error(data.error || 'request failed');
             renderTopTable('top-pods-body', data.pods || [], 'Pod');
             renderTopTable('top-vms-body', data.vms || [], 'VM');
         } catch (e) {
@@ -237,8 +237,12 @@
     async function loadEtcdHealth() {
         try {
             const resp = await fetch('/api/status/etcd');
-            if (!resp.ok) throw new Error((await resp.json()).error);
+            if (resp.status === 404) {
+                document.getElementById('etcd-card').classList.add('hidden');
+                return;
+            }
             const data = await resp.json();
+            if (!resp.ok) throw new Error(data.error || 'request failed');
             renderEtcd(data);
         } catch (e) {
             document.getElementById('etcd-body').innerHTML = errorMsg(e.message);
@@ -275,6 +279,76 @@
 
         html += '</div>';
         document.getElementById('etcd-body').innerHTML = html;
+    }
+
+    // --- GPU Utilization ---
+    async function loadGPUs() {
+        try {
+            const resp = await fetch('/api/status/gpus');
+            const gpus = await resp.json();
+            if (!resp.ok) throw new Error(gpus.error || 'request failed');
+            if (!gpus || gpus.length === 0) return;
+            document.getElementById('gpu-section').classList.remove('hidden');
+            renderGPUs(gpus);
+        } catch (e) {
+            // No GPU nodes, keep hidden
+        }
+    }
+
+    function renderGPUs(nodes) {
+        let html = `<table class="pf-v5-c-table pf-m-compact" style="width:100%;">
+            <thead><tr>
+                <th>Node</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th style="width:22%;">GPU Used / Capacity</th>
+                <th>Consumers</th>
+            </tr></thead><tbody>`;
+
+        for (const n of nodes) {
+            const statusColor = n.status === 'Ready' ? 'green' : 'red';
+            const usageColor = n.gpuUsagePct > 90 ? '#c9190b' : n.gpuUsagePct > 70 ? '#f0ab00' : '#3e8635';
+            const cappedUsage = Math.min(n.gpuUsagePct, 100);
+            const gpuLabel = `${n.gpuUsed} / ${n.gpuCapacity}`;
+
+            let consumersHtml = '-';
+            if (n.gpuConsumers && n.gpuConsumers.length > 0) {
+                consumersHtml = n.gpuConsumers.map(c =>
+                    `<div class="pf-v5-u-font-size-xs"><span class="pf-v5-u-font-weight-bold">${escapeHtml(c.name)}</span> <span class="pf-v5-u-color-200">${escapeHtml(c.namespace)}</span> <span class="pf-v5-c-label pf-m-compact pf-m-blue"><span class="pf-v5-c-label__content">${c.gpus} GPU${c.gpus > 1 ? 's' : ''}</span></span></div>`
+                ).join('');
+            }
+
+            html += `<tr>
+                <td>
+                    <div class="pf-v5-u-font-size-sm">${escapeHtml(n.name)}</div>
+                </td>
+                <td><span class="pf-v5-u-font-size-sm">${escapeHtml(n.gpuType || 'Unknown')}</span></td>
+                <td><span class="pf-v5-c-label pf-m-${statusColor}"><span class="pf-v5-c-label__content">${escapeHtml(n.status)}</span></span></td>
+                <td>
+                    <div style="position:relative;height:18px;background:#f0f0f0;border-radius:3px;overflow:visible;margin:2px 0;">
+                        <div style="position:absolute;height:100%;width:${cappedUsage}%;background:${usageColor};border-radius:3px;" title="Used: ${n.gpuUsagePct.toFixed(0)}%"></div>
+                        <span style="position:absolute;right:4px;top:1px;font-size:11px;color:#333;font-weight:600;">${gpuLabel}</span>
+                    </div>
+                    <div class="pf-v5-l-flex pf-m-justify-content-space-between" style="margin-top:2px;">
+                        <span class="pf-v5-u-font-size-xs pf-v5-u-color-200">${n.gpuFree} free</span>
+                        <span class="pf-v5-u-font-size-xs pf-v5-u-color-200">${n.gpuUsagePct.toFixed(0)}% used</span>
+                    </div>
+                </td>
+                <td>${consumersHtml}</td>
+            </tr>`;
+        }
+
+        html += '</tbody></table>';
+
+        // Summary row
+        const totalCap = nodes.reduce((s, n) => s + n.gpuCapacity, 0);
+        const totalUsed = nodes.reduce((s, n) => s + n.gpuUsed, 0);
+        const totalFree = totalCap - totalUsed;
+        html += `<div class="pf-v5-u-font-size-xs pf-v5-u-color-200 pf-v5-u-mt-sm">
+            Total: <span class="pf-v5-u-font-weight-bold">${totalUsed}</span> used / <span class="pf-v5-u-font-weight-bold">${totalCap}</span> capacity (<span class="pf-v5-u-font-weight-bold">${totalFree}</span> free across ${nodes.length} node${nodes.length > 1 ? 's' : ''})
+        </div>`;
+
+        document.getElementById('gpu-body').innerHTML = html;
     }
 
     // --- Helpers ---
@@ -342,8 +416,8 @@
     async function loadStorageClasses() {
         try {
             const resp = await fetch('/api/status/storageclasses');
-            if (!resp.ok) throw new Error((await resp.json()).error);
             const scs = await resp.json();
+            if (!resp.ok) throw new Error(scs.error || 'request failed');
             renderStorageClasses(scs || []);
         } catch (e) {
             document.getElementById('storageclasses-body').innerHTML = errorMsg(e.message);
@@ -396,6 +470,7 @@
     // --- Init ---
     loadClusterHealth();
     loadNodeUtilization();
+    loadGPUs();
     loadTopConsumers();
     loadEtcdHealth();
     loadNetworks();
@@ -404,6 +479,7 @@
 
     setInterval(loadClusterHealth, 60000);
     setInterval(loadNodeUtilization, 60000);
+    setInterval(loadGPUs, 60000);
     setInterval(loadTopConsumers, 60000);
     setInterval(loadEtcdHealth, 60000);
     setInterval(loadNetworks, 60000);

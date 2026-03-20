@@ -488,6 +488,162 @@ func (c *Client) GetClusterID() (string, error) {
 	return jsonPath(cv, "spec", "clusterID"), nil
 }
 
+// GPU resource keys for each vendor's device plugin
+var gpuResourceKeys = []struct {
+	key   string
+	label string
+}{
+	{"nvidia.com/gpu", "NVIDIA"},
+	{"amd.com/gpu", "AMD"},
+	{"gpu.intel.com/i915", "Intel"},
+	{"gpu.intel.com/xe", "Intel"},
+}
+
+type GPUNode struct {
+	Name         string        `json:"name"`
+	Roles        []string      `json:"roles"`
+	Status       string        `json:"status"`
+	GPUType      string        `json:"gpuType"`
+	GPUCapacity  int           `json:"gpuCapacity"`
+	GPUUsed      int           `json:"gpuUsed"`
+	GPUFree      int           `json:"gpuFree"`
+	GPUUsagePct  float64       `json:"gpuUsagePct"`
+	GPUConsumers []GPUConsumer `json:"gpuConsumers"`
+}
+
+type GPUConsumer struct {
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	GPUs      int    `json:"gpus"`
+}
+
+// gpuCount checks a resource map for any known GPU resource key and returns the count and vendor label.
+func gpuCount(resources map[string]interface{}) (int, string) {
+	if resources == nil {
+		return 0, ""
+	}
+	for _, gk := range gpuResourceKeys {
+		if v, ok := resources[gk.key].(string); ok {
+			n := parseInt(v)
+			if n > 0 {
+				return n, gk.label
+			}
+		}
+	}
+	return 0, ""
+}
+
+func (c *Client) GetGPUNodes() ([]GPUNode, error) {
+	nodesData, err := c.get("/api/v1/nodes")
+	if err != nil {
+		return nil, fmt.Errorf("nodes: %w", err)
+	}
+
+	podsData, err := c.get("/api/v1/pods?fieldSelector=status.phase%3DRunning")
+	if err != nil {
+		return nil, fmt.Errorf("pods: %w", err)
+	}
+
+	type gpuPodInfo struct {
+		gpuReq    int
+		consumers []GPUConsumer
+	}
+	gpuByNode := map[string]*gpuPodInfo{}
+	for _, item := range jsonArray(podsData, "items") {
+		pod := item.(map[string]interface{})
+		nodeName := jsonPath(pod, "spec", "nodeName")
+		if nodeName == "" {
+			continue
+		}
+		podName := jsonPath(pod, "metadata", "name")
+		ns := jsonPath(pod, "metadata", "namespace")
+
+		var podGPU int
+		for _, c := range jsonArray(pod, "spec", "containers") {
+			container := c.(map[string]interface{})
+			if n, _ := gpuCount(jsonMap(container, "resources", "requests")); n > 0 {
+				podGPU += n
+			} else if n, _ := gpuCount(jsonMap(container, "resources", "limits")); n > 0 {
+				podGPU += n
+			}
+		}
+
+		if podGPU > 0 {
+			if gpuByNode[nodeName] == nil {
+				gpuByNode[nodeName] = &gpuPodInfo{}
+			}
+			gpuByNode[nodeName].gpuReq += podGPU
+			name := podName
+			if strings.HasPrefix(podName, "virt-launcher-") {
+				parts := strings.Split(podName, "-")
+				if len(parts) > 2 {
+					name = strings.Join(parts[2:len(parts)-1], "-")
+				}
+			}
+			gpuByNode[nodeName].consumers = append(gpuByNode[nodeName].consumers, GPUConsumer{
+				Name:      name,
+				Namespace: ns,
+				GPUs:      podGPU,
+			})
+		}
+	}
+
+	var result []GPUNode
+	for _, item := range jsonArray(nodesData, "items") {
+		node := item.(map[string]interface{})
+		capacity := jsonMap(node, "status", "capacity")
+		gpuCap, gpuType := gpuCount(capacity)
+		if gpuCap == 0 {
+			continue
+		}
+
+		name := jsonPath(node, "metadata", "name")
+
+		var roles []string
+		labels := jsonMap(node, "metadata", "labels")
+		for k := range labels {
+			if len(k) > 24 && k[:24] == "node-role.kubernetes.io/" {
+				roles = append(roles, k[24:])
+			}
+		}
+
+		status := "NotReady"
+		for _, cond := range jsonArray(node, "status", "conditions") {
+			cm := cond.(map[string]interface{})
+			if cm["type"] == "Ready" && cm["status"] == "True" {
+				status = "Ready"
+			}
+		}
+
+		gpuUsed := 0
+		var consumers []GPUConsumer
+		if info, ok := gpuByNode[name]; ok {
+			gpuUsed = info.gpuReq
+			consumers = info.consumers
+		}
+		if consumers == nil {
+			consumers = []GPUConsumer{}
+		}
+
+		gn := GPUNode{
+			Name:         name,
+			Roles:        roles,
+			Status:       status,
+			GPUType:      gpuType,
+			GPUCapacity:  gpuCap,
+			GPUUsed:      gpuUsed,
+			GPUFree:      gpuCap - gpuUsed,
+			GPUConsumers: consumers,
+		}
+		if gpuCap > 0 {
+			gn.GPUUsagePct = float64(gpuUsed) / float64(gpuCap) * 100
+		}
+		result = append(result, gn)
+	}
+
+	return result, nil
+}
+
 func (c *Client) GetNodeUtilization() ([]NodeUtilization, error) {
 	nodesData, err := c.get("/api/v1/nodes")
 	if err != nil {

@@ -18,7 +18,9 @@ import (
 
 const gatherTimeout = 30 * time.Minute
 
-var validObjectType = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9./-]*$`)
+var validSince = regexp.MustCompile(`^[0-9]+h$`)
+var validJobIDPattern = regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
+var validBackupDir = regexp.MustCompile(`^/home/core/etcd-backup-[0-9-]+$`)
 
 type GatherType string
 
@@ -41,6 +43,7 @@ type Job struct {
 	FilePath   string     `json:"-"`
 	FileName   string     `json:"fileName,omitempty"`
 	Anonymize  bool       `json:"anonymize"`
+	Since      string     `json:"since,omitempty"`
 	LogOutput  string     `json:"logOutput,omitempty"`
 	Step       int        `json:"step"`
 	TotalSteps int        `json:"totalSteps"`
@@ -104,14 +107,45 @@ func (m *Manager) ListJobs() []*Job {
 	return jobs
 }
 
-func (m *Manager) StartGather(gatherType GatherType, anonymize bool) string {
-	id := fmt.Sprintf("%s-%d", gatherType, time.Now().UnixMilli())
+// sanitizeID ensures a job ID is safe for use in file paths.
+func sanitizeID(id string) string {
+	id = filepath.Base(id)
+	if !validJobIDPattern.MatchString(id) {
+		return "invalid"
+	}
+	return id
+}
+
+func (m *Manager) StartGather(gatherType GatherType, anonymize bool, since string) string {
+	if since != "" && !validSince.MatchString(since) {
+		since = ""
+	}
+	// Map to safe prefix via switch — breaks taint from user input for CodeQL.
+	var prefix string
+	switch gatherType {
+	case GatherDefault:
+		prefix = "default"
+	case GatherVirtualization:
+		prefix = "virtualization"
+	case GatherODF:
+		prefix = "odf"
+	case GatherAudit:
+		prefix = "audit"
+	case GatherAll:
+		prefix = "all"
+	case GatherEtcdBackup:
+		prefix = "etcd-backup"
+	default:
+		prefix = "unknown"
+	}
+	id := fmt.Sprintf("%s-%d", prefix, time.Now().UnixMilli())
 	job := &Job{
 		ID:        id,
 		Type:      gatherType,
 		Status:    "running",
 		StartedAt: time.Now(),
 		Anonymize: anonymize,
+		Since:     since,
 	}
 
 	m.mu.Lock()
@@ -232,34 +266,50 @@ func (m *Manager) runGather(job *Job) {
 
 	var steps []gatherStep
 
+	sinceArg := ""
+	if job.Since != "" {
+		sinceArg = "--since=" + job.Since
+	}
+
 	defaultArgs := []string{"adm", "must-gather", "--dest-dir=" + destDir}
 	if m.images.DefaultMustGather != "" {
 		defaultArgs = append(defaultArgs, "--image="+m.images.DefaultMustGather)
+	}
+	if sinceArg != "" {
+		defaultArgs = append(defaultArgs, sinceArg)
 	}
 	auditArgs := []string{"adm", "must-gather", "--dest-dir=" + destDir}
 	if m.images.DefaultMustGather != "" {
 		auditArgs = append(auditArgs, "--image="+m.images.DefaultMustGather)
 	}
+	if sinceArg != "" {
+		auditArgs = append(auditArgs, sinceArg)
+	}
 	auditArgs = append(auditArgs, "--", "/usr/bin/gather_audit_logs")
+
+	cnvArgs := []string{"adm", "must-gather", "--dest-dir=" + destDir, "--image=" + m.images.CNVMustGather}
+	if sinceArg != "" {
+		cnvArgs = append(cnvArgs, sinceArg)
+	}
+	odfArgs := []string{"adm", "must-gather", "--dest-dir=" + destDir, "--image=" + m.images.ODFMustGather}
+	if sinceArg != "" {
+		odfArgs = append(odfArgs, sinceArg)
+	}
 
 	switch job.Type {
 	case GatherDefault:
 		steps = append(steps, gatherStep{"Default must-gather", defaultArgs})
 	case GatherVirtualization:
-		steps = append(steps, gatherStep{"Virtualization must-gather", []string{"adm", "must-gather", "--dest-dir=" + destDir,
-			"--image=" + m.images.CNVMustGather}})
+		steps = append(steps, gatherStep{"Virtualization must-gather", cnvArgs})
 	case GatherODF:
-		steps = append(steps, gatherStep{"ODF must-gather", []string{"adm", "must-gather", "--dest-dir=" + destDir,
-			"--image=" + m.images.ODFMustGather}})
+		steps = append(steps, gatherStep{"ODF must-gather", odfArgs})
 	case GatherAudit:
 		steps = append(steps, gatherStep{"Audit logs", auditArgs})
 	case GatherAll:
 		steps = append(steps,
 			gatherStep{"Default must-gather", defaultArgs},
-			gatherStep{"Virtualization must-gather", []string{"adm", "must-gather", "--dest-dir=" + destDir,
-				"--image=" + m.images.CNVMustGather}},
-			gatherStep{"ODF must-gather", []string{"adm", "must-gather", "--dest-dir=" + destDir,
-				"--image=" + m.images.ODFMustGather}},
+			gatherStep{"Virtualization must-gather", cnvArgs},
+			gatherStep{"ODF must-gather", odfArgs},
 			gatherStep{"Audit logs", auditArgs},
 		)
 	}
@@ -402,14 +452,20 @@ func (m *Manager) runEtcdBackup(job *Job) {
 		m.setError(job, "could not determine backup directory from output")
 		return
 	}
+	backupDir = strings.TrimSpace(backupDir)
+	if !validBackupDir.MatchString(backupDir) {
+		m.setError(job, "unexpected backup directory path")
+		return
+	}
 
 	m.setStep(job, 3, totalSteps, "Copying backup files")
 	m.appendLog(job, "=== Step 3/3: Copying backup files from node ===")
 
-	tarFile := filepath.Join(m.workDir, job.ID+".tar.gz")
-	copyScript := fmt.Sprintf(`chroot /host /bin/bash -c 'cat <(cd %q && tar czf - .)'`, backupDir)
+	safeID := sanitizeID(job.ID)
+	tarFile := filepath.Join(m.workDir, safeID+".tar.gz")
 
-	copyCmd := exec.Command("oc", "debug", "node/"+masterNode, "--", "/bin/bash", "-c", copyScript)
+	copyCmd := exec.Command("oc", "debug", "node/"+masterNode, "--",
+		"/bin/bash", "-c", `chroot /host tar czf - -C "$1" .`, "--", backupDir)
 	outFile, err := os.Create(tarFile)
 	if err != nil {
 		m.setError(job, fmt.Sprintf("create output file: %v", err))
@@ -435,8 +491,8 @@ func (m *Manager) runEtcdBackup(job *Job) {
 
 	m.appendLog(job, fmt.Sprintf("Backup archive created: %s (%.1f MB)", filepath.Base(tarFile), float64(info.Size())/(1024*1024)))
 
-	cleanupScript := fmt.Sprintf(`chroot /host rm -rf %q`, backupDir)
-	cleanupCmd := exec.Command("oc", "debug", "node/"+masterNode, "--", "/bin/bash", "-c", cleanupScript)
+	cleanupCmd := exec.Command("oc", "debug", "node/"+masterNode, "--",
+		"/bin/bash", "-c", `chroot /host rm -rf "$1"`, "--", backupDir)
 	_ = cleanupCmd.Run()
 
 	m.mu.Lock()
@@ -450,9 +506,14 @@ func (m *Manager) runEtcdBackup(job *Job) {
 }
 
 func (m *Manager) fallbackAnonymize(dir string) error {
-	sedCmd := exec.Command("bash", "-c",
-		fmt.Sprintf(`find %q -type f \( -name "*.log" -o -name "*.yaml" -o -name "*.json" -o -name "*.txt" \) -exec sed -i -E 's/\b([0-9]{1,3}\.){3}[0-9]{1,3}\b/x.x.x.x/g' {} +`, dir))
-	return sedCmd.Run()
+	dir = filepath.Clean(dir)
+	if !strings.HasPrefix(dir, m.workDir) {
+		return fmt.Errorf("directory outside work dir")
+	}
+	findCmd := exec.Command("find", dir, "-type", "f",
+		"(", "-name", "*.log", "-o", "-name", "*.yaml", "-o", "-name", "*.json", "-o", "-name", "*.txt", ")",
+		"-exec", "sed", "-i", "-E", `s/\b([0-9]{1,3}\.){3}[0-9]{1,3}\b/x.x.x.x/g`, "{}", "+")
+	return findCmd.Run()
 }
 
 func (m *Manager) setError(job *Job, msg string) {
@@ -487,8 +548,37 @@ func (m *Manager) getEtcdPodName() (string, error) {
 	return name, nil
 }
 
+// AllowedDiagObjects is the set of resource types permitted for drill-down diagnostics.
+var AllowedDiagObjects = map[string]bool{
+	"secrets": true, "configmaps": true, "events": true, "events.events.k8s.io": true,
+	"pods": true, "deployments": true, "replicasets": true, "statefulsets": true,
+	"daemonsets": true, "jobs": true, "cronjobs": true,
+	"services": true, "endpoints": true, "ingresses": true, "routes": true,
+	"persistentvolumeclaims": true, "persistentvolumes": true,
+	"serviceaccounts": true, "roles": true, "rolebindings": true,
+	"clusterroles": true, "clusterrolebindings": true,
+	"namespaces": true, "nodes": true,
+	"virtualmachines": true, "virtualmachineinstances": true,
+}
+
 func (m *Manager) StartDiag(diagType, objectType string) string {
-	id := fmt.Sprintf("diag-%s-%d", diagType, time.Now().UnixMilli())
+	// Map to safe prefix via switch — breaks taint from user input for CodeQL.
+	var prefix string
+	switch diagType {
+	case "object-sizes":
+		prefix = "diag-object-sizes"
+	case "object-counts":
+		prefix = "diag-object-counts"
+	case "ns-breakdown":
+		prefix = "diag-ns-breakdown"
+	case "creation-timeline":
+		prefix = "diag-creation-timeline"
+	case "ns-object-counts":
+		prefix = "diag-ns-object-counts"
+	default:
+		prefix = "diag-unknown"
+	}
+	id := fmt.Sprintf("%s-%d", prefix, time.Now().UnixMilli())
 	dj := &DiagJob{
 		ID:        id,
 		Type:      diagType,
@@ -516,9 +606,10 @@ func (m *Manager) GetDiagJob(id string) *DiagJob {
 }
 
 func (m *Manager) runDiag(dj *DiagJob, objectType string) {
-	if objectType != "" && !validObjectType.MatchString(objectType) {
-		m.setDiagError(dj, "invalid object type: must be alphanumeric with dots, dashes, or slashes")
-		return
+	// Validate objectType against allowlist locally (breaks taint chain for CodeQL).
+	var safeObjectType string
+	if AllowedDiagObjects[objectType] {
+		safeObjectType = objectType
 	}
 
 	podName, err := m.getEtcdPodName()
@@ -536,28 +627,31 @@ func (m *Manager) runDiag(dj *DiagJob, objectType string) {
 	case "ns-breakdown":
 		script = `etcdctl get / --prefix --keys-only | grep -oE -e "^/kubernetes.io/secrets/[-a-z|.0-9]*/" -e "^/kubernetes.io/configmaps/[-a-z|.0-9]*/" -e "^/kubernetes.io/events/[-a-z|.0-9]*/" | sort -u | while read KEY; do printf "$KEY\t" && etcdctl get ${KEY##* } --prefix --print-value-only | wc -c | numfmt --to=iec ; done | sort -k2 -hr | head -50 | awk -F'/' 'BEGIN{print "NAMESPACE TYPE SIZE"}{print $4" "$3" "$5}' | column -t`
 	case "creation-timeline":
-		if objectType == "" {
-			m.setDiagError(dj, "object type is required")
+		if safeObjectType == "" {
+			m.setDiagError(dj, "invalid or missing object type")
 			return
 		}
-		script = fmt.Sprintf(`echo "=== By Month ===" && oc get %s -A -o jsonpath='{range .items[*]}{.metadata.creationTimestamp}{"\n"}{end}' | grep -oE "[0-9]{4}-[0-9]{2}" | sort | uniq -c && echo "" && echo "=== By Day ===" && oc get %s -A -o jsonpath='{range .items[*]}{.metadata.creationTimestamp}{"\n"}{end}' | grep -oE "[0-9]{4}-[0-9]{2}-[0-9]{2}" | sort | uniq -c && echo "" && echo "=== By Hour ===" && oc get %s -A -o jsonpath='{range .items[*]}{.metadata.creationTimestamp}{"\n"}{end}' | grep -oE "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}" | sort | uniq -c`,
-			objectType, objectType, objectType)
 	case "ns-object-counts":
-		if objectType == "" {
-			m.setDiagError(dj, "object type is required")
+		if safeObjectType == "" {
+			m.setDiagError(dj, "invalid or missing object type")
 			return
 		}
-		script = fmt.Sprintf(`oc get %s -A --no-headers -o custom-columns=NS:.metadata.namespace 2>/dev/null | sort | uniq -c | sort -rn | head -50`,
-			objectType)
 	default:
 		m.setDiagError(dj, "unknown diagnostic type: "+dj.Type)
 		return
 	}
 
 	var cmd *exec.Cmd
-	if dj.Type == "creation-timeline" || dj.Type == "ns-object-counts" {
-		cmd = exec.Command("bash", "-c", script)
-	} else {
+	switch dj.Type {
+	case "creation-timeline":
+		cmd = exec.Command("bash", "-c",
+			`OBJ="$1"; echo "=== By Month ===" && oc get "$OBJ" -A -o 'jsonpath={range .items[*]}{.metadata.creationTimestamp}{"\n"}{end}' | grep -oE "[0-9]{4}-[0-9]{2}" | sort | uniq -c && echo "" && echo "=== By Day ===" && oc get "$OBJ" -A -o 'jsonpath={range .items[*]}{.metadata.creationTimestamp}{"\n"}{end}' | grep -oE "[0-9]{4}-[0-9]{2}-[0-9]{2}" | sort | uniq -c && echo "" && echo "=== By Hour ===" && oc get "$OBJ" -A -o 'jsonpath={range .items[*]}{.metadata.creationTimestamp}{"\n"}{end}' | grep -oE "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}" | sort | uniq -c`,
+			"--", safeObjectType)
+	case "ns-object-counts":
+		cmd = exec.Command("bash", "-c",
+			`oc get "$1" -A --no-headers -o custom-columns=NS:.metadata.namespace 2>/dev/null | sort | uniq -c | sort -rn | head -50`,
+			"--", safeObjectType)
+	default:
 		cmd = exec.Command("oc", "exec", "-n", "openshift-etcd", "-c", "etcdctl", podName, "--",
 			"sh", "-c", script)
 	}
