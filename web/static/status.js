@@ -3,8 +3,8 @@
     async function loadClusterHealth() {
         try {
             const resp = await fetch('/api/status/cluster');
-            if (!resp.ok) throw new Error((await resp.json()).error);
             const data = await resp.json();
+            if (!resp.ok) throw new Error(data.error || 'request failed');
             renderCluster(data);
             renderControlPlane(data.controlPlane);
             renderOperators(data.operators);
@@ -94,8 +94,8 @@
     async function loadNodeUtilization() {
         try {
             const resp = await fetch('/api/status/nodes');
-            if (!resp.ok) throw new Error((await resp.json()).error);
             const nodes = await resp.json();
+            if (!resp.ok) throw new Error(nodes.error || 'request failed');
             renderNodeUtilization(nodes || []);
         } catch (e) {
             document.getElementById('node-util-body').innerHTML = errorMsg(e.message);
@@ -192,8 +192,8 @@
     async function loadTopConsumers() {
         try {
             const resp = await fetch('/api/status/top');
-            if (!resp.ok) throw new Error((await resp.json()).error);
             const data = await resp.json();
+            if (!resp.ok) throw new Error(data.error || 'request failed');
             renderTopTable('top-pods-body', data.pods || [], 'Pod');
             renderTopTable('top-vms-body', data.vms || [], 'VM');
         } catch (e) {
@@ -237,8 +237,8 @@
     async function loadEtcdHealth() {
         try {
             const resp = await fetch('/api/status/etcd');
-            if (!resp.ok) throw new Error((await resp.json()).error);
             const data = await resp.json();
+            if (!resp.ok) throw new Error(data.error || 'request failed');
             renderEtcd(data);
         } catch (e) {
             document.getElementById('etcd-body').innerHTML = errorMsg(e.message);
@@ -281,8 +281,8 @@
     async function loadGPUs() {
         try {
             const resp = await fetch('/api/status/gpus');
-            if (!resp.ok) throw new Error((await resp.json()).error);
             const gpus = await resp.json();
+            if (!resp.ok) throw new Error(gpus.error || 'request failed');
             if (!gpus || gpus.length === 0) return;
             document.getElementById('gpu-section').classList.remove('hidden');
             renderGPUs(gpus);
@@ -412,8 +412,8 @@
     async function loadStorageClasses() {
         try {
             const resp = await fetch('/api/status/storageclasses');
-            if (!resp.ok) throw new Error((await resp.json()).error);
             const scs = await resp.json();
+            if (!resp.ok) throw new Error(scs.error || 'request failed');
             renderStorageClasses(scs || []);
         } catch (e) {
             document.getElementById('storageclasses-body').innerHTML = errorMsg(e.message);
