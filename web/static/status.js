@@ -237,6 +237,10 @@
     async function loadEtcdHealth() {
         try {
             const resp = await fetch('/api/status/etcd');
+            if (resp.status === 404) {
+                document.getElementById('etcd-card').classList.add('hidden');
+                return;
+            }
             const data = await resp.json();
             if (!resp.ok) throw new Error(data.error || 'request failed');
             renderEtcd(data);
