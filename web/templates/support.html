@@ -80,7 +80,7 @@
 
                         <hr class="pf-v5-c-divider" style="margin-bottom:32px;">
 
-                        <div class="pf-v5-l-flex pf-m-align-items-center pf-m-justify-content-space-between">
+                        <div class="pf-v5-l-flex pf-m-align-items-center pf-m-gap-lg pf-v5-u-mb-md" style="flex-wrap:wrap;">
                             <div class="pf-v5-l-flex pf-m-align-items-center pf-m-gap-sm">
                                 <span class="pf-v5-u-font-size-sm pf-v5-u-font-weight-bold">Anonymize:</span>
                                 <div class="pf-v5-c-toggle-group" id="anonymize-toggle">
@@ -97,6 +97,31 @@
                                 </div>
                                 <span class="pf-v5-u-font-size-sm pf-v5-u-color-200" id="anon-hint">Data will be sent as-is</span>
                             </div>
+                            <div class="pf-v5-l-flex pf-m-align-items-center pf-m-gap-sm">
+                                <span class="pf-v5-u-font-size-sm pf-v5-u-font-weight-bold">Time frame:</span>
+                                <div class="pf-v5-c-toggle-group" id="since-toggle">
+                                    <div class="pf-v5-c-toggle-group__item">
+                                        <button class="pf-v5-c-toggle-group__button pf-m-selected" data-since-enabled="false" type="button">
+                                            <span class="pf-v5-c-toggle-group__text">Off</span>
+                                        </button>
+                                    </div>
+                                    <div class="pf-v5-c-toggle-group__item">
+                                        <button class="pf-v5-c-toggle-group__button" data-since-enabled="true" type="button">
+                                            <span class="pf-v5-c-toggle-group__text">On</span>
+                                        </button>
+                                    </div>
+                                </div>
+                                <select class="pf-v5-c-form-control" id="since-select" disabled style="width:auto;min-width:100px;">
+                                    <option value="6h">Last 6 hours</option>
+                                    <option value="12h">Last 12 hours</option>
+                                    <option value="18h">Last 18 hours</option>
+                                    <option value="24h" selected>Last 24 hours</option>
+                                    <option value="48h">Last 48 hours</option>
+                                </select>
+                                <span class="pf-v5-u-font-size-sm pf-v5-u-color-200" id="since-hint">Collect all logs (no time limit)</span>
+                            </div>
+                        </div>
+                        <div class="pf-v5-l-flex pf-m-align-items-center pf-m-justify-content-flex-end">
                             <button class="pf-v5-c-button pf-m-primary" id="start-gather-btn">Start Gathering</button>
                         </div>
                     </div>

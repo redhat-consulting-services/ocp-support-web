@@ -17,6 +17,29 @@
     });
     document.querySelector('#anonymize-toggle [data-anon="false"]').classList.add('pf-m-selected');
 
+    // Since (time frame) toggle
+    let sinceEnabled = false;
+    const sinceSelect = document.getElementById('since-select');
+    const sinceHint = document.getElementById('since-hint');
+    document.querySelectorAll('#since-toggle [data-since-enabled]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            sinceEnabled = btn.dataset.sinceEnabled === 'true';
+            document.querySelectorAll('#since-toggle .pf-v5-c-toggle-group__button').forEach(b => b.classList.remove('pf-m-selected'));
+            btn.classList.add('pf-m-selected');
+            sinceSelect.disabled = !sinceEnabled;
+            updateSinceHint();
+        });
+    });
+    sinceSelect.addEventListener('change', updateSinceHint);
+    function updateSinceHint() {
+        if (!sinceEnabled) {
+            sinceHint.textContent = 'Collect all logs (no time limit)';
+        } else {
+            const val = sinceSelect.value;
+            sinceHint.textContent = 'Only collect logs from the last ' + val.replace('h', ' hours');
+        }
+    }
+
     // Gather type card selection
     let selectedType = 'default';
     document.querySelectorAll('.gather-type-card').forEach(card => {
@@ -35,11 +58,12 @@
         startBtn.disabled = true;
         startBtn.textContent = 'Starting...';
         const anonymize = anonymizeEnabled;
+        const since = sinceEnabled ? sinceSelect.value : '';
         try {
             const res = await fetch('/api/support/gather', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({type, anonymize})
+                body: JSON.stringify({type, anonymize, since})
             });
             const data = await res.json();
             if (data.error) {
@@ -47,7 +71,7 @@
                 return;
             }
             activeJobs[data.id] = true;
-            addJobCard(data.id, type, anonymize);
+            addJobCard(data.id, type, anonymize, since);
             startPolling();
         } catch (e) {
             alert('Failed to start gather: ' + e.message);
@@ -79,10 +103,11 @@
         return s + 's';
     }
 
-    function addJobCard(id, type, anonymize) {
+    function addJobCard(id, type, anonymize, since) {
         jobsEmpty.classList.add('hidden');
         if (document.getElementById('job-' + id)) return;
 
+        const sinceLabel = since ? ` (${since.replace('h', ' hours')})` : '';
         const card = document.createElement('div');
         card.id = 'job-' + id;
         card.className = 'pf-v5-c-card pf-v5-u-mb-md';
@@ -90,7 +115,7 @@
             <div class="pf-v5-c-card__title">
                 <div class="pf-v5-l-flex pf-m-justify-content-space-between pf-m-align-items-center">
                     <div class="pf-v5-l-flex pf-m-gap-sm pf-m-align-items-center">
-                        <h3 class="pf-v5-c-card__title-text">${labelFor(type)}${anonymize ? ' (anonymized)' : ''}</h3>
+                        <h3 class="pf-v5-c-card__title-text">${labelFor(type)}${anonymize ? ' (anonymized)' : ''}${sinceLabel}</h3>
                         <span class="pf-v5-c-label pf-m-blue" id="status-${id}">
                             <span class="pf-v5-c-label__content">Running</span>
                         </span>
@@ -217,7 +242,7 @@
             jobsEmpty.classList.add('hidden');
             jobs.sort((a, b) => new Date(b.startedAt) - new Date(a.startedAt));
             for (const job of jobs) {
-                addJobCard(job.id, job.type, job.anonymize);
+                addJobCard(job.id, job.type, job.anonymize, job.since);
                 updateJobUI(job);
                 if (job.status === 'running') {
                     activeJobs[job.id] = true;
@@ -250,7 +275,7 @@
                     return;
                 }
                 activeJobs[data.id] = true;
-                addJobCard(data.id, 'etcd-backup', false);
+                addJobCard(data.id, 'etcd-backup', false, '');
                 startPolling();
             } catch (e) {
                 alert('Failed to start etcd backup: ' + e.message);

@@ -19,6 +19,7 @@ import (
 const gatherTimeout = 30 * time.Minute
 
 var validObjectType = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9./-]*$`)
+var validSince = regexp.MustCompile(`^[0-9]+h$`)
 
 type GatherType string
 
@@ -41,6 +42,7 @@ type Job struct {
 	FilePath   string     `json:"-"`
 	FileName   string     `json:"fileName,omitempty"`
 	Anonymize  bool       `json:"anonymize"`
+	Since      string     `json:"since,omitempty"`
 	LogOutput  string     `json:"logOutput,omitempty"`
 	Step       int        `json:"step"`
 	TotalSteps int        `json:"totalSteps"`
@@ -104,7 +106,10 @@ func (m *Manager) ListJobs() []*Job {
 	return jobs
 }
 
-func (m *Manager) StartGather(gatherType GatherType, anonymize bool) string {
+func (m *Manager) StartGather(gatherType GatherType, anonymize bool, since string) string {
+	if since != "" && !validSince.MatchString(since) {
+		since = ""
+	}
 	id := fmt.Sprintf("%s-%d", gatherType, time.Now().UnixMilli())
 	job := &Job{
 		ID:        id,
@@ -112,6 +117,7 @@ func (m *Manager) StartGather(gatherType GatherType, anonymize bool) string {
 		Status:    "running",
 		StartedAt: time.Now(),
 		Anonymize: anonymize,
+		Since:     since,
 	}
 
 	m.mu.Lock()
@@ -232,34 +238,50 @@ func (m *Manager) runGather(job *Job) {
 
 	var steps []gatherStep
 
+	sinceArg := ""
+	if job.Since != "" {
+		sinceArg = "--since=" + job.Since
+	}
+
 	defaultArgs := []string{"adm", "must-gather", "--dest-dir=" + destDir}
 	if m.images.DefaultMustGather != "" {
 		defaultArgs = append(defaultArgs, "--image="+m.images.DefaultMustGather)
+	}
+	if sinceArg != "" {
+		defaultArgs = append(defaultArgs, sinceArg)
 	}
 	auditArgs := []string{"adm", "must-gather", "--dest-dir=" + destDir}
 	if m.images.DefaultMustGather != "" {
 		auditArgs = append(auditArgs, "--image="+m.images.DefaultMustGather)
 	}
+	if sinceArg != "" {
+		auditArgs = append(auditArgs, sinceArg)
+	}
 	auditArgs = append(auditArgs, "--", "/usr/bin/gather_audit_logs")
+
+	cnvArgs := []string{"adm", "must-gather", "--dest-dir=" + destDir, "--image=" + m.images.CNVMustGather}
+	if sinceArg != "" {
+		cnvArgs = append(cnvArgs, sinceArg)
+	}
+	odfArgs := []string{"adm", "must-gather", "--dest-dir=" + destDir, "--image=" + m.images.ODFMustGather}
+	if sinceArg != "" {
+		odfArgs = append(odfArgs, sinceArg)
+	}
 
 	switch job.Type {
 	case GatherDefault:
 		steps = append(steps, gatherStep{"Default must-gather", defaultArgs})
 	case GatherVirtualization:
-		steps = append(steps, gatherStep{"Virtualization must-gather", []string{"adm", "must-gather", "--dest-dir=" + destDir,
-			"--image=" + m.images.CNVMustGather}})
+		steps = append(steps, gatherStep{"Virtualization must-gather", cnvArgs})
 	case GatherODF:
-		steps = append(steps, gatherStep{"ODF must-gather", []string{"adm", "must-gather", "--dest-dir=" + destDir,
-			"--image=" + m.images.ODFMustGather}})
+		steps = append(steps, gatherStep{"ODF must-gather", odfArgs})
 	case GatherAudit:
 		steps = append(steps, gatherStep{"Audit logs", auditArgs})
 	case GatherAll:
 		steps = append(steps,
 			gatherStep{"Default must-gather", defaultArgs},
-			gatherStep{"Virtualization must-gather", []string{"adm", "must-gather", "--dest-dir=" + destDir,
-				"--image=" + m.images.CNVMustGather}},
-			gatherStep{"ODF must-gather", []string{"adm", "must-gather", "--dest-dir=" + destDir,
-				"--image=" + m.images.ODFMustGather}},
+			gatherStep{"Virtualization must-gather", cnvArgs},
+			gatherStep{"ODF must-gather", odfArgs},
 			gatherStep{"Audit logs", auditArgs},
 		)
 	}
