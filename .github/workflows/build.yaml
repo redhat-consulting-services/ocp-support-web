@@ -36,7 +36,12 @@ jobs:
             echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
             echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
             echo "is_release=true" >> "$GITHUB_OUTPUT"
-            echo "tags=${TAG} latest" >> "$GITHUB_OUTPUT"
+            {
+              echo "tags<<EOF"
+              echo "${TAG}"
+              echo "latest"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
           else
             echo "tag=latest" >> "$GITHUB_OUTPUT"
             echo "version=dev" >> "$GITHUB_OUTPUT"
