@@ -127,7 +127,10 @@ func (h *Handler) handleStartGather(w http.ResponseWriter, r *http.Request) {
 	gatherType := mustgather.GatherType(req.Type)
 	switch gatherType {
 	case mustgather.GatherDefault, mustgather.GatherVirtualization, mustgather.GatherODF,
-		mustgather.GatherAudit, mustgather.GatherAll, mustgather.GatherEtcdBackup:
+		mustgather.GatherACM, mustgather.GatherLogging, mustgather.GatherServiceMesh,
+		mustgather.GatherCompliance, mustgather.GatherMTC, mustgather.GatherGitOps,
+		mustgather.GatherServerless, mustgather.GatherAudit, mustgather.GatherAll,
+		mustgather.GatherEtcdBackup:
 		// valid
 	default:
 		jsonError(w, "invalid gather type", 400)
@@ -395,6 +398,21 @@ func (h *Handler) handleEtcdHealth(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	caps := h.st.GetCapabilities()
+	if caps.ACM && caps.ACMVersion != "" {
+		h.mg.SetImageIfEmpty("acm", "registry.redhat.io/rhacm2/acm-must-gather-rhel9:v"+caps.ACMVersion)
+	}
+	if caps.GitOps && caps.GitOpsVersion != "" {
+		h.mg.SetImageIfEmpty("gitops", "registry.redhat.io/openshift-gitops-1/must-gather-rhel8:v"+caps.GitOpsVersion)
+	}
+	if caps.ServiceMesh && caps.ServiceMeshVersion != "" {
+		h.mg.SetImageIfEmpty("service-mesh", "registry.redhat.io/openshift-service-mesh/istio-must-gather-rhel9:v"+caps.ServiceMeshVersion)
+	}
+	if caps.MTC && caps.MTCVersion != "" {
+		h.mg.SetImageIfEmpty("mtc", "registry.redhat.io/rhmtc/openshift-migration-must-gather-rhel8:v"+caps.MTCVersion)
+	}
+	if caps.Serverless && caps.ServerlessVersion != "" {
+		h.mg.SetImageIfEmpty("serverless", "registry.redhat.io/openshift-serverless-1/svls-must-gather-rhel8:v"+caps.ServerlessVersion)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(caps)
 }

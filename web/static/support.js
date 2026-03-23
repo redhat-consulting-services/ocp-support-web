@@ -92,6 +92,13 @@
             'default': 'Default Must-Gather',
             'virtualization': 'Virtualization',
             'odf': 'ODF (Storage)',
+            'acm': 'ACM',
+            'logging': 'Logging',
+            'service-mesh': 'Service Mesh',
+            'compliance': 'Compliance',
+            'mtc': 'MTC',
+            'gitops': 'GitOps',
+            'serverless': 'Serverless',
             'audit': 'Audit Logs',
             'all': 'Gather All',
             'etcd-backup': 'Etcd Backup'
@@ -508,9 +515,36 @@
             const caps = await res.json();
             const cnvCard = document.querySelector('.gather-type-card[data-type="virtualization"]');
             const odfCard = document.querySelector('.gather-type-card[data-type="odf"]');
-            const allCard = document.querySelector('.gather-type-card[data-type="all"]');
+            const acmCard = document.querySelector('.gather-type-card[data-type="acm"]');
             if (caps.cnv && cnvCard) cnvCard.style.display = '';
             if (caps.odf && odfCard) odfCard.style.display = '';
+            if (caps.acm && acmCard) {
+                acmCard.style.display = '';
+                if (caps.acmVersion) {
+                    acmCard.querySelector('.gather-type-card__desc').textContent =
+                        'Advanced Cluster Management v' + caps.acmVersion;
+                }
+            }
+            const capMap = {
+                logging: {type: 'logging'},
+                serviceMesh: {type: 'service-mesh', versionKey: 'serviceMeshVersion', label: 'Service Mesh'},
+                compliance: {type: 'compliance'},
+                mtc: {type: 'mtc', versionKey: 'mtcVersion', label: 'MTC'},
+                gitops: {type: 'gitops', versionKey: 'gitopsVersion', label: 'GitOps'},
+                serverless: {type: 'serverless', versionKey: 'serverlessVersion', label: 'Serverless'}
+            };
+            for (const [capKey, info] of Object.entries(capMap)) {
+                if (caps[capKey]) {
+                    const card = document.querySelector('.gather-type-card[data-type="' + info.type + '"]');
+                    if (card) {
+                        card.style.display = '';
+                        if (info.versionKey && caps[info.versionKey]) {
+                            card.querySelector('.gather-type-card__desc').textContent =
+                                card.querySelector('.gather-type-card__desc').textContent + ' v' + caps[info.versionKey];
+                        }
+                    }
+                }
+            }
         } catch (e) {
             // If capabilities check fails, show all cards
         }

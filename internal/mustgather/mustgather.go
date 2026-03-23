@@ -29,6 +29,13 @@ const (
 	GatherVirtualization GatherType = "virtualization"
 	GatherODF            GatherType = "odf"
 	GatherAudit          GatherType = "audit"
+	GatherACM            GatherType = "acm"
+	GatherLogging        GatherType = "logging"
+	GatherServiceMesh    GatherType = "service-mesh"
+	GatherCompliance     GatherType = "compliance"
+	GatherMTC            GatherType = "mtc"
+	GatherGitOps         GatherType = "gitops"
+	GatherServerless     GatherType = "serverless"
 	GatherAll            GatherType = "all"
 	GatherEtcdBackup     GatherType = "etcd-backup"
 )
@@ -60,9 +67,16 @@ type DiagJob struct {
 }
 
 type ImageConfig struct {
-	DefaultMustGather string
-	CNVMustGather     string
-	ODFMustGather     string
+	DefaultMustGather   string
+	CNVMustGather       string
+	ODFMustGather       string
+	ACMMustGather       string
+	LoggingMustGather   string
+	ServiceMeshMustGather string
+	ComplianceMustGather  string
+	MTCMustGather       string
+	GitOpsMustGather    string
+	ServerlessMustGather  string
 }
 
 type Manager struct {
@@ -84,6 +98,34 @@ func NewManager(workDir string, images ImageConfig) (*Manager, error) {
 		jobs:     make(map[string]*Job),
 		diagJobs: make(map[string]*DiagJob),
 	}, nil
+}
+
+// SetImageIfEmpty sets a must-gather image if not already configured.
+func (m *Manager) SetImageIfEmpty(name, image string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	switch name {
+	case "acm":
+		if m.images.ACMMustGather == "" {
+			m.images.ACMMustGather = image
+		}
+	case "gitops":
+		if m.images.GitOpsMustGather == "" {
+			m.images.GitOpsMustGather = image
+		}
+	case "service-mesh":
+		if m.images.ServiceMeshMustGather == "" {
+			m.images.ServiceMeshMustGather = image
+		}
+	case "mtc":
+		if m.images.MTCMustGather == "" {
+			m.images.MTCMustGather = image
+		}
+	case "serverless":
+		if m.images.ServerlessMustGather == "" {
+			m.images.ServerlessMustGather = image
+		}
+	}
 }
 
 func (m *Manager) GetJob(id string) *Job {
@@ -129,6 +171,20 @@ func (m *Manager) StartGather(gatherType GatherType, anonymize bool, since strin
 		prefix = "virtualization"
 	case GatherODF:
 		prefix = "odf"
+	case GatherACM:
+		prefix = "acm"
+	case GatherLogging:
+		prefix = "logging"
+	case GatherServiceMesh:
+		prefix = "service-mesh"
+	case GatherCompliance:
+		prefix = "compliance"
+	case GatherMTC:
+		prefix = "mtc"
+	case GatherGitOps:
+		prefix = "gitops"
+	case GatherServerless:
+		prefix = "serverless"
 	case GatherAudit:
 		prefix = "audit"
 	case GatherAll:
@@ -287,29 +343,42 @@ func (m *Manager) runGather(job *Job) {
 	}
 	auditArgs = append(auditArgs, "--", "/usr/bin/gather_audit_logs")
 
-	cnvArgs := []string{"adm", "must-gather", "--dest-dir=" + destDir, "--image=" + m.images.CNVMustGather}
-	if sinceArg != "" {
-		cnvArgs = append(cnvArgs, sinceArg)
-	}
-	odfArgs := []string{"adm", "must-gather", "--dest-dir=" + destDir, "--image=" + m.images.ODFMustGather}
-	if sinceArg != "" {
-		odfArgs = append(odfArgs, sinceArg)
+	imageArgs := func(image string) []string {
+		args := []string{"adm", "must-gather", "--dest-dir=" + destDir, "--image=" + image}
+		if sinceArg != "" {
+			args = append(args, sinceArg)
+		}
+		return args
 	}
 
 	switch job.Type {
 	case GatherDefault:
 		steps = append(steps, gatherStep{"Default must-gather", defaultArgs})
 	case GatherVirtualization:
-		steps = append(steps, gatherStep{"Virtualization must-gather", cnvArgs})
+		steps = append(steps, gatherStep{"Virtualization must-gather", imageArgs(m.images.CNVMustGather)})
 	case GatherODF:
-		steps = append(steps, gatherStep{"ODF must-gather", odfArgs})
+		steps = append(steps, gatherStep{"ODF must-gather", imageArgs(m.images.ODFMustGather)})
+	case GatherACM:
+		steps = append(steps, gatherStep{"ACM must-gather", imageArgs(m.images.ACMMustGather)})
+	case GatherLogging:
+		steps = append(steps, gatherStep{"Logging must-gather", imageArgs(m.images.LoggingMustGather)})
+	case GatherServiceMesh:
+		steps = append(steps, gatherStep{"Service Mesh must-gather", imageArgs(m.images.ServiceMeshMustGather)})
+	case GatherCompliance:
+		steps = append(steps, gatherStep{"Compliance must-gather", imageArgs(m.images.ComplianceMustGather)})
+	case GatherMTC:
+		steps = append(steps, gatherStep{"MTC must-gather", imageArgs(m.images.MTCMustGather)})
+	case GatherGitOps:
+		steps = append(steps, gatherStep{"GitOps must-gather", imageArgs(m.images.GitOpsMustGather)})
+	case GatherServerless:
+		steps = append(steps, gatherStep{"Serverless must-gather", imageArgs(m.images.ServerlessMustGather)})
 	case GatherAudit:
 		steps = append(steps, gatherStep{"Audit logs", auditArgs})
 	case GatherAll:
 		steps = append(steps,
 			gatherStep{"Default must-gather", defaultArgs},
-			gatherStep{"Virtualization must-gather", cnvArgs},
-			gatherStep{"ODF must-gather", odfArgs},
+			gatherStep{"Virtualization must-gather", imageArgs(m.images.CNVMustGather)},
+			gatherStep{"ODF must-gather", imageArgs(m.images.ODFMustGather)},
 			gatherStep{"Audit logs", auditArgs},
 		)
 	}

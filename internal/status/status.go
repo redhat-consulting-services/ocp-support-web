@@ -298,8 +298,20 @@ func (c *Client) GetClusterHealth() (*ClusterHealth, error) {
 }
 
 type ClusterCapabilities struct {
-	CNV bool `json:"cnv"`
-	ODF bool `json:"odf"`
+	CNV         bool   `json:"cnv"`
+	ODF         bool   `json:"odf"`
+	ACM         bool   `json:"acm"`
+	ACMVersion  string `json:"acmVersion,omitempty"`
+	Logging     bool   `json:"logging"`
+	ServiceMesh bool   `json:"serviceMesh"`
+	Compliance  bool   `json:"compliance"`
+	MTC         bool   `json:"mtc"`
+	GitOps            bool   `json:"gitops"`
+	GitOpsVersion     string `json:"gitopsVersion,omitempty"`
+	Serverless        bool   `json:"serverless"`
+	ServerlessVersion string `json:"serverlessVersion,omitempty"`
+	ServiceMeshVersion string `json:"serviceMeshVersion,omitempty"`
+	MTCVersion        string `json:"mtcVersion,omitempty"`
 }
 
 func (c *Client) GetCapabilities() *ClusterCapabilities {
@@ -317,7 +329,81 @@ func (c *Client) GetCapabilities() *ClusterCapabilities {
 		}
 	}
 
+	// Check for ACM (MultiClusterHub) and extract version
+	if data, err := c.get("/apis/operator.open-cluster-management.io/v1/multiclusterhubs"); err == nil {
+		if items := jsonArray(data, "items"); len(items) > 0 {
+			caps.ACM = true
+			if item, ok := items[0].(map[string]interface{}); ok {
+				if st, ok := item["status"].(map[string]interface{}); ok {
+					if v, ok := st["currentVersion"].(string); ok {
+						caps.ACMVersion = v
+					}
+				}
+			}
+		}
+	}
+
+	// Check for OpenShift Logging
+	if _, err := c.get("/apis/logging.openshift.io/v1/clusterloggings"); err == nil {
+		caps.Logging = true
+	}
+
+	// Check for Service Mesh
+	if _, err := c.get("/apis/maistra.io/v2/servicemeshcontrolplanes"); err == nil {
+		caps.ServiceMesh = true
+		caps.ServiceMeshVersion = c.csvVersion("openshift-operators", "servicemeshoperator.v")
+	}
+
+	// Check for Compliance Operator
+	if _, err := c.get("/apis/compliance.openshift.io/v1alpha1/compliancescans"); err == nil {
+		caps.Compliance = true
+	}
+
+	// Check for Migration Toolkit for Containers
+	if _, err := c.get("/apis/migration.openshift.io/v1alpha1/migrationcontrollers"); err == nil {
+		caps.MTC = true
+		caps.MTCVersion = c.csvVersion("openshift-migration", "mtc-operator.v")
+	}
+
+	// Check for OpenShift GitOps
+	if _, err := c.get("/apis/argoproj.io/v1beta1/argocds"); err == nil {
+		caps.GitOps = true
+		caps.GitOpsVersion = c.csvVersion("openshift-gitops-operator", "openshift-gitops-operator.v")
+	}
+
+	// Check for OpenShift Serverless
+	if _, err := c.get("/apis/operator.knative.dev/v1beta1/knativeservings"); err == nil {
+		caps.Serverless = true
+		caps.ServerlessVersion = c.csvVersion("openshift-serverless", "serverless-operator.v")
+	}
+
 	return caps
+}
+
+// csvVersion queries the CSVs in a namespace and returns the full version
+// string of the first CSV whose name starts with the given prefix.
+func (c *Client) csvVersion(ns, prefix string) string {
+	data, err := c.get("/apis/operators.coreos.com/v1alpha1/namespaces/" + ns + "/clusterserviceversions")
+	if err != nil {
+		return ""
+	}
+	for _, item := range jsonArray(data, "items") {
+		m, _ := item.(map[string]interface{})
+		if m == nil {
+			continue
+		}
+		meta, _ := m["metadata"].(map[string]interface{})
+		name, _ := meta["name"].(string)
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		spec, _ := m["spec"].(map[string]interface{})
+		v, _ := spec["version"].(string)
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 type NMStateNetwork struct {
