@@ -9,6 +9,7 @@
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+    <ul class="pf-v5-c-alert-group pf-m-toast" id="toast-container"></ul>
     <div class="pf-v5-c-page">
         <header class="pf-v5-c-masthead">
             <div class="pf-v5-c-masthead__main">
@@ -145,11 +146,11 @@
                         <hr class="pf-v5-c-divider" style="margin-bottom:32px;">
 
                         <div class="pf-v5-l-flex pf-m-align-items-center pf-m-gap-lg pf-v5-u-mb-md" style="flex-wrap:wrap;">
-                            <div class="pf-v5-l-flex pf-m-align-items-center pf-m-gap-sm">
+                            <div class="pf-v5-l-flex pf-m-align-items-center pf-m-gap-sm" style="flex-wrap:wrap;">
                                 <span class="pf-v5-u-font-size-sm pf-v5-u-font-weight-bold">Anonymize:</span>
                                 <div class="pf-v5-c-toggle-group" id="anonymize-toggle">
                                     <div class="pf-v5-c-toggle-group__item">
-                                        <button class="pf-v5-c-toggle-group__button" data-anon="false" type="button">
+                                        <button class="pf-v5-c-toggle-group__button pf-m-selected" data-anon="false" type="button">
                                             <span class="pf-v5-c-toggle-group__text">Off</span>
                                         </button>
                                     </div>
@@ -157,6 +158,24 @@
                                         <button class="pf-v5-c-toggle-group__button" data-anon="true" type="button">
                                             <span class="pf-v5-c-toggle-group__text">On</span>
                                         </button>
+                                    </div>
+                                </div>
+                                <div id="anon-options" class="pf-v5-l-flex pf-m-gap-sm" style="display:none;flex-wrap:wrap;">
+                                    <div class="pf-v5-c-check" style="display:inline-flex;margin-right:4px;">
+                                        <input class="pf-v5-c-check__input" type="checkbox" id="anon-ips" name="anon-ips" checked>
+                                        <label class="pf-v5-c-check__label pf-v5-u-font-size-sm" for="anon-ips">IPs</label>
+                                    </div>
+                                    <div class="pf-v5-c-check" style="display:inline-flex;margin-right:4px;">
+                                        <input class="pf-v5-c-check__input" type="checkbox" id="anon-macs" name="anon-macs" checked>
+                                        <label class="pf-v5-c-check__label pf-v5-u-font-size-sm" for="anon-macs">MACs</label>
+                                    </div>
+                                    <div class="pf-v5-c-check" style="display:inline-flex;margin-right:4px;">
+                                        <input class="pf-v5-c-check__input" type="checkbox" id="anon-domains" name="anon-domains" checked>
+                                        <label class="pf-v5-c-check__label pf-v5-u-font-size-sm" for="anon-domains">Domains</label>
+                                    </div>
+                                    <div class="pf-v5-c-check" style="display:inline-flex;">
+                                        <input class="pf-v5-c-check__input" type="checkbox" id="anon-services" name="anon-services" checked>
+                                        <label class="pf-v5-c-check__label pf-v5-u-font-size-sm" for="anon-services">Service DNS</label>
                                     </div>
                                 </div>
                                 <span class="pf-v5-u-font-size-sm pf-v5-u-color-200" id="anon-hint">Data will be sent as-is</span>

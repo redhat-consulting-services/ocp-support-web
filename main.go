@@ -45,6 +45,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create must-gather manager: %v", err)
 	}
+	if cfg.OpenShift.ClusterDomain != "" {
+		mgr.SetClusterDomain(cfg.OpenShift.ClusterDomain)
+	}
 	log.Printf("Must-gather support enabled (workdir: %s)", cfg.MustGatherDir)
 
 	stClient := status.NewClient(
