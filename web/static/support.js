@@ -10,6 +10,20 @@
     let pollInterval = null;
     let activeJobs = {};
 
+    window.stopJob = async function(jobId, type) {
+        if (!confirm('Are you sure you want to stop the ' + labelFor(type) + ' job?')) return;
+        const btn = document.getElementById('stop-' + jobId);
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = 'Stopping...';
+        }
+        try {
+            await fetch('/api/support/gather/' + encodeURIComponent(jobId) + '/stop', { method: 'POST' });
+        } catch (e) {
+            console.error('Failed to stop job', e);
+        }
+    };
+
     // Anonymize toggle
     let anonymizeEnabled = false;
     const anonHint = document.getElementById('anon-hint');
@@ -22,6 +36,89 @@
         });
     });
     document.querySelector('#anonymize-toggle [data-anon="false"]').classList.add('pf-m-selected');
+
+    // Advanced options toggle
+    const advancedToggle = document.getElementById('advanced-toggle');
+    const advancedOptions = document.getElementById('advanced-options');
+    const advancedArrow = document.getElementById('advanced-arrow');
+    if (advancedToggle) {
+        advancedToggle.addEventListener('click', () => {
+            const hidden = advancedOptions.classList.toggle('hidden');
+            advancedArrow.innerHTML = hidden ? '&#9654;' : '&#9660;';
+        });
+    }
+
+    // Advanced: node name / node selector / host network
+    const nodeNameSelect = document.getElementById('node-name-select');
+    const nodeSelectorSelect = document.getElementById('node-selector-select');
+    let hostNetworkEnabled = false;
+
+    // Mutual exclusion: selecting node name clears node selector and vice versa
+    if (nodeNameSelect) {
+        nodeNameSelect.addEventListener('change', () => {
+            if (nodeNameSelect.value) {
+                nodeSelectorSelect.value = '';
+                nodeSelectorSelect.disabled = true;
+            } else {
+                nodeSelectorSelect.disabled = false;
+            }
+        });
+    }
+    if (nodeSelectorSelect) {
+        nodeSelectorSelect.addEventListener('change', () => {
+            if (nodeSelectorSelect.value) {
+                nodeNameSelect.value = '';
+                nodeNameSelect.disabled = true;
+            } else {
+                nodeNameSelect.disabled = false;
+            }
+        });
+    }
+
+    // Host network toggle
+    document.querySelectorAll('#host-network-toggle [data-hostnet]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            hostNetworkEnabled = btn.dataset.hostnet === 'true';
+            document.querySelectorAll('#host-network-toggle .pf-v5-c-toggle-group__button').forEach(b => b.classList.remove('pf-m-selected'));
+            btn.classList.add('pf-m-selected');
+        });
+    });
+
+    // Load nodes for dropdowns
+    async function loadNodes() {
+        try {
+            const res = await fetch('/api/support/nodes');
+            const nodes = await res.json();
+            if (!Array.isArray(nodes) || nodes.length === 0) return;
+
+            // Populate node name dropdown
+            for (const node of nodes) {
+                const opt = document.createElement('option');
+                opt.value = node.name;
+                opt.textContent = node.name;
+                nodeNameSelect.appendChild(opt);
+            }
+
+            // Collect unique label key=value pairs (skip kubernetes.io internal labels)
+            const labelSet = new Set();
+            for (const node of nodes) {
+                if (!node.labels) continue;
+                for (const [k, v] of Object.entries(node.labels)) {
+                    if (k.includes('kubernetes.io/') || k.includes('k8s.io/')) continue;
+                    labelSet.add(k + '=' + v);
+                }
+            }
+            const sortedLabels = Array.from(labelSet).sort();
+            for (const label of sortedLabels) {
+                const opt = document.createElement('option');
+                opt.value = label;
+                opt.textContent = label;
+                nodeSelectorSelect.appendChild(opt);
+            }
+        } catch (e) {
+            // Nodes endpoint may not be available
+        }
+    }
 
     // Since (time frame) toggle
     let sinceEnabled = false;
@@ -65,11 +162,14 @@
         startBtn.textContent = 'Starting...';
         const anonymize = anonymizeEnabled;
         const since = sinceEnabled ? sinceSelect.value : '';
+        const nodeName = nodeNameSelect ? nodeNameSelect.value : '';
+        const nodeSelector = nodeSelectorSelect ? nodeSelectorSelect.value : '';
+        const hostNetwork = hostNetworkEnabled;
         try {
             const res = await fetch('/api/support/gather', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({type, anonymize, since})
+                body: JSON.stringify({type, anonymize, since, nodeName, nodeSelector, hostNetwork})
             });
             const data = await res.json();
             if (data.error) {
@@ -99,6 +199,15 @@
             'mtc': 'MTC',
             'gitops': 'GitOps',
             'serverless': 'Serverless',
+            'mce': 'MCE',
+            'netobserv': 'Network Observability',
+            'local-storage': 'Local Storage',
+            'sandboxed': 'Sandboxed Containers',
+            'nhc': 'Node Health Check',
+            'numa': 'NUMA Resources',
+            'ptp': 'PTP',
+            'secrets-store': 'Secrets Store CSI',
+            'lvms': 'LVMS',
             'audit': 'Audit Logs',
             'all': 'Gather All',
             'etcd-backup': 'Etcd Backup'
@@ -136,7 +245,11 @@
                         </span>
                         <span class="pf-v5-u-font-size-sm pf-v5-u-color-200" id="elapsed-${safeId}"></span>
                     </div>
-                    <div id="actions-${safeId}" class="hidden"></div>
+                    <div id="actions-${safeId}">
+                        <button class="pf-v5-c-button pf-m-danger pf-m-small" id="stop-${safeId}" onclick="stopJob('${safeId}', '${escapeHtml(type)}')" style="display:inline-flex;align-items:center;gap:4px;">
+                            <svg style="width:14px;height:14px;fill:currentColor" viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10" rx="1"/></svg>
+                            Stop</button>
+                    </div>
                 </div>
             </div>
             <div class="pf-v5-c-card__body">
@@ -149,6 +262,7 @@
                         </div>
                     </div>
                 </div>
+                <div class="step-tabs" id="step-tabs-${safeId}"></div>
                 <pre class="pf-v5-u-font-size-xs" id="log-${safeId}" style="max-height:300px;overflow-y:auto;background:#1b1d21;color:#d2d2d2;padding:10px;border-radius:4px;white-space:pre-wrap;font-family:'Red Hat Mono',monospace;line-height:1.4;"></pre>
             </div>`;
         jobsContainer.prepend(card);
@@ -183,6 +297,100 @@
         }
     }
 
+    // Track which step tab is selected per job (null = auto-follow active step)
+    const selectedStepTab = {};
+
+    function parseSteps(logOutput) {
+        const steps = [];
+        if (!logOutput) return steps;
+        const lines = logOutput.split('\n');
+        let current = null;
+        for (const line of lines) {
+            const startMatch = line.match(/^=== Step (\d+)\/(\d+): (.+) ===$/);
+            if (startMatch) {
+                if (current) steps.push(current);
+                current = { num: parseInt(startMatch[1]), total: parseInt(startMatch[2]), label: startMatch[3], lines: [], status: 'running' };
+                continue;
+            }
+            const completeMatch = line.match(/^=== (.+) complete ===$/);
+            if (completeMatch && current) {
+                current.status = 'complete';
+                current.lines.push(line);
+                steps.push(current);
+                current = null;
+                continue;
+            }
+            const failedMatch = line.match(/^=== (.+) failed ===$/);
+            if (failedMatch && current) {
+                current.status = 'failed';
+                current.lines.push(line);
+                steps.push(current);
+                current = null;
+                continue;
+            }
+            if (current) {
+                current.lines.push(line);
+            }
+        }
+        if (current) steps.push(current);
+        return steps;
+    }
+
+    function renderStepTabs(jobId, steps, jobStatus) {
+        const tabsEl = document.getElementById('step-tabs-' + jobId);
+        if (!tabsEl || steps.length <= 1) return;
+
+        const activeStep = selectedStepTab[jobId];
+        tabsEl.innerHTML = '';
+        for (const step of steps) {
+            const tab = document.createElement('span');
+            tab.className = 'step-tab';
+            if (step.status === 'running') tab.classList.add('step-running');
+            else if (step.status === 'complete') tab.classList.add('step-complete');
+            else if (step.status === 'failed') tab.classList.add('step-failed');
+
+            const isActive = activeStep === step.num || (activeStep == null && step.status === 'running');
+            if (isActive) tab.classList.add('active');
+
+            let icon = '';
+            if (step.status === 'complete') icon = '<span class="step-icon">✓</span>';
+            else if (step.status === 'failed') icon = '<span class="step-icon">✗</span>';
+            else if (step.status === 'running') icon = '<span class="step-icon btn-spinner" style="width:11px;height:11px;border-width:1.5px;margin:0;"></span>';
+
+            tab.innerHTML = icon + escapeHtml(step.num + '. ' + step.label);
+            tab.addEventListener('click', () => {
+                selectedStepTab[jobId] = (selectedStepTab[jobId] === step.num) ? null : step.num;
+                renderStepTabs(jobId, steps, jobStatus);
+                showStepLog(jobId, steps);
+            });
+            tabsEl.appendChild(tab);
+        }
+
+        // When job completes and still auto-following, reset to show full log
+        if ((jobStatus === 'complete' || jobStatus === 'failed') && activeStep == null) {
+            selectedStepTab[jobId] = null;
+        }
+    }
+
+    function showStepLog(jobId, steps) {
+        const logEl = document.getElementById('log-' + jobId);
+        if (!logEl) return;
+        const active = selectedStepTab[jobId];
+        if (active == null) {
+            // Restore full log from data attribute
+            if (logEl.dataset.fullLog) {
+                logEl.textContent = logEl.dataset.fullLog;
+                logEl.scrollTop = logEl.scrollHeight;
+            }
+            return;
+        }
+        const step = steps.find(s => s.num === active);
+        if (step) {
+            logEl.textContent = '=== Step ' + step.num + '/' + step.total + ': ' + step.label + ' ===\n' + step.lines.join('\n');
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+    }
+
     function updateJobUI(job) {
         const logEl = document.getElementById('log-' + job.id);
         const statusEl = document.getElementById('status-' + job.id);
@@ -195,9 +403,18 @@
         const actionsEl = document.getElementById('actions-' + job.id);
         if (!logEl) return;
 
+        const steps = parseSteps(job.logOutput);
+        renderStepTabs(job.id, steps, job.status);
+
         if (job.logOutput) {
-            logEl.textContent = job.logOutput;
-            logEl.scrollTop = logEl.scrollHeight;
+            logEl.dataset.fullLog = job.logOutput;
+            const active = selectedStepTab[job.id];
+            if (active == null) {
+                logEl.textContent = job.logOutput;
+                logEl.scrollTop = logEl.scrollHeight;
+            } else {
+                showStepLog(job.id, steps);
+            }
         }
 
         if (elapsedEl && job.startedAt) {
@@ -237,11 +454,15 @@
                 Download ${escapeHtml(labelFor(job.type))}</a>`;
         } else if (job.status === 'failed') {
             statusEl.className = 'pf-v5-c-label pf-m-red';
-            statusEl.innerHTML = '<span class="pf-v5-c-label__content">Failed</span>';
+            const isStopped = job.error && job.error.includes('Stopped by user');
+            statusEl.innerHTML = '<span class="pf-v5-c-label__content">' + (isStopped ? 'Stopped' : 'Failed') + '</span>';
             progressEl.classList.add('hidden');
+            actionsEl.innerHTML = '';
             if (stepLabel) {
-                if (job.error && job.error.includes('timed out')) {
-                    stepLabel.textContent = 'Must-gather timed out after 30 minutes';
+                if (isStopped) {
+                    stepLabel.textContent = 'Stopped by user';
+                } else if (job.error && job.error.includes('timed out')) {
+                    stepLabel.textContent = 'Must-gather timed out after 60 minutes';
                 } else {
                     stepLabel.textContent = job.error || 'Failed';
                 }
@@ -516,8 +737,20 @@
             const cnvCard = document.querySelector('.gather-type-card[data-type="virtualization"]');
             const odfCard = document.querySelector('.gather-type-card[data-type="odf"]');
             const acmCard = document.querySelector('.gather-type-card[data-type="acm"]');
-            if (caps.cnv && cnvCard) cnvCard.style.display = '';
-            if (caps.odf && odfCard) odfCard.style.display = '';
+            if (caps.cnv && cnvCard) {
+                cnvCard.style.display = '';
+                if (caps.cnvVersion) {
+                    cnvCard.querySelector('.gather-type-card__desc').textContent =
+                        'OpenShift Virtualization v' + caps.cnvVersion;
+                }
+            }
+            if (caps.odf && odfCard) {
+                odfCard.style.display = '';
+                if (caps.odfVersion) {
+                    odfCard.querySelector('.gather-type-card__desc').textContent =
+                        'OpenShift Data Foundation v' + caps.odfVersion;
+                }
+            }
             if (caps.acm && acmCard) {
                 acmCard.style.display = '';
                 if (caps.acmVersion) {
@@ -526,12 +759,21 @@
                 }
             }
             const capMap = {
-                logging: {type: 'logging'},
+                logging: {type: 'logging', versionKey: 'loggingVersion', label: 'Logging'},
                 serviceMesh: {type: 'service-mesh', versionKey: 'serviceMeshVersion', label: 'Service Mesh'},
                 compliance: {type: 'compliance'},
                 mtc: {type: 'mtc', versionKey: 'mtcVersion', label: 'MTC'},
                 gitops: {type: 'gitops', versionKey: 'gitopsVersion', label: 'GitOps'},
-                serverless: {type: 'serverless', versionKey: 'serverlessVersion', label: 'Serverless'}
+                serverless: {type: 'serverless', versionKey: 'serverlessVersion', label: 'Serverless'},
+                mce: {type: 'mce'},
+                netObserv: {type: 'netobserv'},
+                localStorage: {type: 'local-storage', versionKey: 'localStorageVersion', label: 'Local Storage'},
+                sandboxed: {type: 'sandboxed', versionKey: 'sandboxedVersion', label: 'Sandboxed Containers'},
+                nhc: {type: 'nhc', versionKey: 'nhcVersion', label: 'Node Health Check'},
+                numa: {type: 'numa', versionKey: 'numaVersion', label: 'NUMA Resources'},
+                ptp: {type: 'ptp', versionKey: 'ptpVersion', label: 'PTP'},
+                secretsStore: {type: 'secrets-store', versionKey: 'secretsStoreVersion', label: 'Secrets Store CSI'},
+                lvms: {type: 'lvms', versionKey: 'lvmsVersion', label: 'LVMS'}
             };
             for (const [capKey, info] of Object.entries(capMap)) {
                 if (caps[capKey]) {
@@ -545,6 +787,31 @@
                     }
                 }
             }
+            // Update "Gather All" description with detected operators
+            const allDesc = document.getElementById('all-desc');
+            if (allDesc) {
+                const detected = ['Default'];
+                if (caps.cnv) detected.push('Virtualization');
+                if (caps.odf) detected.push('ODF');
+                if (caps.acm) detected.push('ACM');
+                if (caps.logging) detected.push('Logging');
+                if (caps.serviceMesh) detected.push('Service Mesh');
+                if (caps.compliance) detected.push('Compliance');
+                if (caps.mtc) detected.push('MTC');
+                if (caps.gitops) detected.push('GitOps');
+                if (caps.serverless) detected.push('Serverless');
+                if (caps.mce) detected.push('MCE');
+                if (caps.netObserv) detected.push('NetObserv');
+                if (caps.localStorage) detected.push('Local Storage');
+                if (caps.sandboxed) detected.push('Sandboxed');
+                if (caps.nhc) detected.push('NHC');
+                if (caps.numa) detected.push('NUMA');
+                if (caps.ptp) detected.push('PTP');
+                if (caps.secretsStore) detected.push('Secrets Store');
+                if (caps.lvms) detected.push('LVMS');
+                detected.push('Audit');
+                allDesc.textContent = detected.join(' + ');
+            }
         } catch (e) {
             // If capabilities check fails, show all cards
         }
@@ -552,5 +819,6 @@
 
     loadCapabilities();
     loadClusterID();
+    loadNodes();
     loadExistingJobs();
 })();

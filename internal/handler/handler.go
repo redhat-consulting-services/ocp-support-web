@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"strings"
 
 	"github.com/redhat-consulting-services/ocp-support-web/internal/monitoring"
 	"github.com/redhat-consulting-services/ocp-support-web/internal/mustgather"
@@ -15,6 +16,8 @@ import (
 )
 
 var validJobID = regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
+var validNodeName = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
+var validNodeSelector = regexp.MustCompile(`^[a-zA-Z0-9./_=-]+(?:,[a-zA-Z0-9./_=-]+)*$`)
 
 type Handler struct {
 	mg      *mustgather.Manager
@@ -68,6 +71,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/support/jobs", h.handleListGatherJobs)
 	mux.HandleFunc("POST /api/support/gather", h.handleStartGather)
 	mux.HandleFunc("GET /api/support/gather/{jobId}", h.handleGatherStatus)
+	mux.HandleFunc("POST /api/support/gather/{jobId}/stop", h.handleStopGather)
 	mux.HandleFunc("GET /api/support/gather/{jobId}/download", h.handleGatherDownload)
 	mux.HandleFunc("POST /api/support/etcd-diag", h.handleStartDiag)
 	mux.HandleFunc("GET /api/support/etcd-diag/{jobId}", h.handleDiagStatus)
@@ -75,6 +79,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	if h.st != nil {
 		mux.HandleFunc("GET /api/support/cluster-id", h.handleClusterID)
 		mux.HandleFunc("GET /api/support/capabilities", h.handleCapabilities)
+		mux.HandleFunc("GET /api/support/nodes", h.handleNodes)
 		mux.HandleFunc("GET /api/status/cluster", h.handleClusterHealth)
 		mux.HandleFunc("GET /api/status/nodes", h.handleNodeUtilization)
 		mux.HandleFunc("GET /api/status/top", h.handleTopConsumers)
@@ -115,9 +120,12 @@ func (h *Handler) handleListGatherJobs(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleStartGather(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Type      string `json:"type"`
-		Anonymize bool   `json:"anonymize"`
-		Since     string `json:"since"`
+		Type         string `json:"type"`
+		Anonymize    bool   `json:"anonymize"`
+		Since        string `json:"since"`
+		NodeName     string `json:"nodeName"`
+		NodeSelector string `json:"nodeSelector"`
+		HostNetwork  bool   `json:"hostNetwork"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, "invalid request body", 400)
@@ -129,7 +137,10 @@ func (h *Handler) handleStartGather(w http.ResponseWriter, r *http.Request) {
 	case mustgather.GatherDefault, mustgather.GatherVirtualization, mustgather.GatherODF,
 		mustgather.GatherACM, mustgather.GatherLogging, mustgather.GatherServiceMesh,
 		mustgather.GatherCompliance, mustgather.GatherMTC, mustgather.GatherGitOps,
-		mustgather.GatherServerless, mustgather.GatherAudit, mustgather.GatherAll,
+		mustgather.GatherServerless, mustgather.GatherMCE, mustgather.GatherNetObserv,
+		mustgather.GatherLocalStorage, mustgather.GatherSandboxed, mustgather.GatherNHC,
+		mustgather.GatherNUMA, mustgather.GatherPTP, mustgather.GatherSecretsStore,
+		mustgather.GatherLVMS, mustgather.GatherAudit, mustgather.GatherAll,
 		mustgather.GatherEtcdBackup:
 		// valid
 	default:
@@ -137,7 +148,24 @@ func (h *Handler) handleStartGather(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id := h.mg.StartGather(gatherType, req.Anonymize, req.Since)
+	if req.NodeName != "" && !validNodeName.MatchString(req.NodeName) {
+		jsonError(w, "invalid node name", 400)
+		return
+	}
+	if req.NodeSelector != "" && !validNodeSelector.MatchString(req.NodeSelector) {
+		jsonError(w, "invalid node selector", 400)
+		return
+	}
+	if req.NodeName != "" && req.NodeSelector != "" {
+		jsonError(w, "node name and node selector cannot be used together", 400)
+		return
+	}
+	opts := mustgather.GatherOpts{
+		NodeName:     req.NodeName,
+		NodeSelector: req.NodeSelector,
+		HostNetwork:  req.HostNetwork,
+	}
+	id := h.mg.StartGather(gatherType, req.Anonymize, req.Since, opts)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"id": id, "status": "running"})
 }
@@ -155,6 +183,20 @@ func (h *Handler) handleGatherStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(job)
+}
+
+func (h *Handler) handleStopGather(w http.ResponseWriter, r *http.Request) {
+	jobID := r.PathValue("jobId")
+	if !validJobID.MatchString(jobID) {
+		jsonError(w, "invalid job ID", 400)
+		return
+	}
+	if !h.mg.StopJob(jobID) {
+		jsonError(w, "job not found or already finished", 404)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "stopping"})
 }
 
 func (h *Handler) handleGatherDownload(w http.ResponseWriter, r *http.Request) {
@@ -398,20 +440,107 @@ func (h *Handler) handleEtcdHealth(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	caps := h.st.GetCapabilities()
-	if caps.ACM && caps.ACMVersion != "" {
-		h.mg.SetImageIfEmpty("acm", "registry.redhat.io/rhacm2/acm-must-gather-rhel9:v"+caps.ACMVersion)
+	if caps.CNV {
+		h.mg.SetDetected(mustgather.GatherVirtualization)
+		if caps.CNVVersion != "" {
+			h.mg.SetImage("cnv", "registry.redhat.io/container-native-virtualization/cnv-must-gather-rhel9:v"+caps.CNVVersion)
+		}
 	}
-	if caps.GitOps && caps.GitOpsVersion != "" {
-		h.mg.SetImageIfEmpty("gitops", "registry.redhat.io/openshift-gitops-1/must-gather-rhel8:v"+caps.GitOpsVersion)
+	if caps.ODF {
+		h.mg.SetDetected(mustgather.GatherODF)
+		if caps.ODFVersion != "" {
+			h.mg.SetImage("odf", "registry.redhat.io/odf4/odf-must-gather-rhel9:v"+majorMinor(caps.ODFVersion))
+		}
 	}
-	if caps.ServiceMesh && caps.ServiceMeshVersion != "" {
-		h.mg.SetImageIfEmpty("service-mesh", "registry.redhat.io/openshift-service-mesh/istio-must-gather-rhel9:v"+caps.ServiceMeshVersion)
+	if caps.ACM {
+		h.mg.SetDetected(mustgather.GatherACM)
+		if caps.ACMVersion != "" {
+			h.mg.SetImage("acm", "registry.redhat.io/rhacm2/acm-must-gather-rhel9:v"+caps.ACMVersion)
+		}
 	}
-	if caps.MTC && caps.MTCVersion != "" {
-		h.mg.SetImageIfEmpty("mtc", "registry.redhat.io/rhmtc/openshift-migration-must-gather-rhel8:v"+caps.MTCVersion)
+	if caps.Logging {
+		h.mg.SetDetected(mustgather.GatherLogging)
+		if caps.LoggingVersion != "" {
+			h.mg.SetImage("logging", "registry.redhat.io/openshift-logging/cluster-logging-rhel9-operator:v"+caps.LoggingVersion)
+		}
 	}
-	if caps.Serverless && caps.ServerlessVersion != "" {
-		h.mg.SetImageIfEmpty("serverless", "registry.redhat.io/openshift-serverless-1/svls-must-gather-rhel8:v"+caps.ServerlessVersion)
+	if caps.ServiceMesh {
+		h.mg.SetDetected(mustgather.GatherServiceMesh)
+		if caps.ServiceMeshVersion != "" {
+			h.mg.SetImage("service-mesh", "registry.redhat.io/openshift-service-mesh/istio-must-gather-rhel8:v"+caps.ServiceMeshVersion)
+		}
+	}
+	if caps.Compliance {
+		h.mg.SetDetected(mustgather.GatherCompliance)
+	}
+	if caps.MTC {
+		h.mg.SetDetected(mustgather.GatherMTC)
+		if caps.MTCVersion != "" {
+			h.mg.SetImage("mtc", "registry.redhat.io/rhmtc/openshift-migration-must-gather-rhel8:v"+caps.MTCVersion)
+		}
+	}
+	if caps.GitOps {
+		h.mg.SetDetected(mustgather.GatherGitOps)
+		if caps.GitOpsVersion != "" {
+			h.mg.SetImage("gitops", "registry.redhat.io/openshift-gitops-1/must-gather-rhel8:v"+caps.GitOpsVersion)
+		}
+	}
+	if caps.Serverless {
+		h.mg.SetDetected(mustgather.GatherServerless)
+		if caps.ServerlessVersion != "" {
+			h.mg.SetImage("serverless", "registry.redhat.io/openshift-serverless-1/svls-must-gather-rhel8:v"+caps.ServerlessVersion)
+		}
+	}
+	if caps.MCE {
+		h.mg.SetDetected(mustgather.GatherMCE)
+		if caps.MCEVersion != "" {
+			h.mg.SetImage("mce", "registry.redhat.io/multicluster-engine/must-gather-rhel9:v"+caps.MCEVersion)
+		}
+	}
+	if caps.NetObserv {
+		h.mg.SetDetected(mustgather.GatherNetObserv)
+	}
+	if caps.LocalStorage {
+		h.mg.SetDetected(mustgather.GatherLocalStorage)
+		if caps.LocalStorageVersion != "" {
+			h.mg.SetImage("local-storage", "registry.redhat.io/openshift4/ose-local-storage-mustgather-rhel9:v"+caps.LocalStorageVersion)
+		}
+	}
+	if caps.Sandboxed {
+		h.mg.SetDetected(mustgather.GatherSandboxed)
+		if caps.SandboxedVersion != "" {
+			h.mg.SetImage("sandboxed", "registry.redhat.io/openshift-sandboxed-containers/osc-must-gather-rhel8:v"+caps.SandboxedVersion)
+		}
+	}
+	if caps.NHC {
+		h.mg.SetDetected(mustgather.GatherNHC)
+		if caps.NHCVersion != "" {
+			h.mg.SetImage("nhc", "registry.redhat.io/workload-availability/node-healthcheck-must-gather-rhel9:v"+caps.NHCVersion)
+		}
+	}
+	if caps.NUMA {
+		h.mg.SetDetected(mustgather.GatherNUMA)
+		if caps.NUMAVersion != "" {
+			h.mg.SetImage("numa", "registry.redhat.io/numaresources/numaresources-must-gather-rhel9:v"+caps.NUMAVersion)
+		}
+	}
+	if caps.PTP {
+		h.mg.SetDetected(mustgather.GatherPTP)
+		if caps.PTPVersion != "" {
+			h.mg.SetImage("ptp", "registry.redhat.io/openshift4/ptp-must-gather-rhel8:v"+caps.PTPVersion)
+		}
+	}
+	if caps.SecretsStore {
+		h.mg.SetDetected(mustgather.GatherSecretsStore)
+		if caps.SecretsStoreVersion != "" {
+			h.mg.SetImage("secrets-store", "registry.redhat.io/openshift4/ose-secrets-store-csi-mustgather-rhel9:v"+caps.SecretsStoreVersion)
+		}
+	}
+	if caps.LVMS {
+		h.mg.SetDetected(mustgather.GatherLVMS)
+		if caps.LVMSVersion != "" {
+			h.mg.SetImage("lvms", "registry.redhat.io/lvms4/lvms-must-gather-rhel9:v"+caps.LVMSVersion)
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(caps)
@@ -441,6 +570,25 @@ func (h *Handler) handleStorageClasses(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(scs)
+}
+
+func (h *Handler) handleNodes(w http.ResponseWriter, r *http.Request) {
+	nodes, err := h.st.GetNodes()
+	if err != nil {
+		jsonError(w, "failed to get nodes", 500)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(nodes)
+}
+
+// majorMinor extracts "X.Y" from version strings like "4.20.7-rhodf".
+func majorMinor(version string) string {
+	parts := strings.SplitN(version, ".", 3)
+	if len(parts) >= 2 {
+		return parts[0] + "." + parts[1]
+	}
+	return version
 }
 
 func jsonError(w http.ResponseWriter, msg string, code int) {

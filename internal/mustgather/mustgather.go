@@ -16,7 +16,7 @@ import (
 	"github.com/redhat-consulting-services/ocp-support-web/internal/metrics"
 )
 
-const gatherTimeout = 30 * time.Minute
+const gatherTimeout = 60 * time.Minute
 
 var validSince = regexp.MustCompile(`^[0-9]+h$`)
 var validJobIDPattern = regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
@@ -36,9 +36,24 @@ const (
 	GatherMTC            GatherType = "mtc"
 	GatherGitOps         GatherType = "gitops"
 	GatherServerless     GatherType = "serverless"
+	GatherMCE            GatherType = "mce"
+	GatherNetObserv      GatherType = "netobserv"
+	GatherLocalStorage   GatherType = "local-storage"
+	GatherSandboxed      GatherType = "sandboxed"
+	GatherNHC            GatherType = "nhc"
+	GatherNUMA           GatherType = "numa"
+	GatherPTP            GatherType = "ptp"
+	GatherSecretsStore   GatherType = "secrets-store"
+	GatherLVMS           GatherType = "lvms"
 	GatherAll            GatherType = "all"
 	GatherEtcdBackup     GatherType = "etcd-backup"
 )
+
+type GatherOpts struct {
+	NodeName     string `json:"nodeName,omitempty"`
+	NodeSelector string `json:"nodeSelector,omitempty"`
+	HostNetwork  bool   `json:"hostNetwork,omitempty"`
+}
 
 type Job struct {
 	ID         string     `json:"id"`
@@ -67,25 +82,36 @@ type DiagJob struct {
 }
 
 type ImageConfig struct {
-	DefaultMustGather   string
-	CNVMustGather       string
-	ODFMustGather       string
-	ACMMustGather       string
-	LoggingMustGather   string
-	ServiceMeshMustGather string
-	ComplianceMustGather  string
-	MTCMustGather       string
-	GitOpsMustGather    string
-	ServerlessMustGather  string
+	DefaultMustGather      string
+	CNVMustGather          string
+	ODFMustGather          string
+	ACMMustGather          string
+	LoggingMustGather      string
+	ServiceMeshMustGather  string
+	ComplianceMustGather   string
+	MTCMustGather          string
+	GitOpsMustGather       string
+	ServerlessMustGather   string
+	MCEMustGather          string
+	NetObservMustGather    string
+	LocalStorageMustGather string
+	SandboxedMustGather    string
+	NHCMustGather          string
+	NUMAMustGather         string
+	PTPMustGather          string
+	SecretsStoreMustGather string
+	LVMSMustGather         string
 }
 
 type Manager struct {
-	workDir  string
-	images   ImageConfig
-	mu       sync.Mutex
-	jobs     map[string]*Job
-	diagMu   sync.Mutex
-	diagJobs map[string]*DiagJob
+	workDir   string
+	images    ImageConfig
+	detected  map[GatherType]bool
+	mu        sync.Mutex
+	jobs      map[string]*Job
+	cancels   map[string]context.CancelFunc
+	diagMu    sync.Mutex
+	diagJobs  map[string]*DiagJob
 }
 
 func NewManager(workDir string, images ImageConfig) (*Manager, error) {
@@ -95,37 +121,149 @@ func NewManager(workDir string, images ImageConfig) (*Manager, error) {
 	return &Manager{
 		workDir:  workDir,
 		images:   images,
+		detected: make(map[GatherType]bool),
 		jobs:     make(map[string]*Job),
+		cancels:  make(map[string]context.CancelFunc),
 		diagJobs: make(map[string]*DiagJob),
 	}, nil
 }
 
-// SetImageIfEmpty sets a must-gather image if not already configured.
+// SetDetected marks a gather type as available on this cluster.
+func (m *Manager) SetDetected(t GatherType) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.detected[t] = true
+}
+
+// SetImage sets a must-gather image, overriding any existing value.
+// Used when auto-detection finds a versioned image that should take
+// precedence over env-var defaults (which may be stale or wrong).
+func (m *Manager) SetImage(name, image string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.setImageLocked(name, image)
+}
+
+// SetImageIfEmpty sets a must-gather image only if not already configured.
 func (m *Manager) SetImageIfEmpty(name, image string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	switch name {
+	case "cnv":
+		if m.images.CNVMustGather != "" {
+			return
+		}
+	case "odf":
+		if m.images.ODFMustGather != "" {
+			return
+		}
 	case "acm":
-		if m.images.ACMMustGather == "" {
-			m.images.ACMMustGather = image
+		if m.images.ACMMustGather != "" {
+			return
+		}
+	case "logging":
+		if m.images.LoggingMustGather != "" {
+			return
 		}
 	case "gitops":
-		if m.images.GitOpsMustGather == "" {
-			m.images.GitOpsMustGather = image
+		if m.images.GitOpsMustGather != "" {
+			return
 		}
 	case "service-mesh":
-		if m.images.ServiceMeshMustGather == "" {
-			m.images.ServiceMeshMustGather = image
+		if m.images.ServiceMeshMustGather != "" {
+			return
 		}
 	case "mtc":
-		if m.images.MTCMustGather == "" {
-			m.images.MTCMustGather = image
+		if m.images.MTCMustGather != "" {
+			return
 		}
 	case "serverless":
-		if m.images.ServerlessMustGather == "" {
-			m.images.ServerlessMustGather = image
+		if m.images.ServerlessMustGather != "" {
+			return
+		}
+	case "mce":
+		if m.images.MCEMustGather != "" {
+			return
+		}
+	case "local-storage":
+		if m.images.LocalStorageMustGather != "" {
+			return
+		}
+	case "sandboxed":
+		if m.images.SandboxedMustGather != "" {
+			return
+		}
+	case "nhc":
+		if m.images.NHCMustGather != "" {
+			return
+		}
+	case "numa":
+		if m.images.NUMAMustGather != "" {
+			return
+		}
+	case "ptp":
+		if m.images.PTPMustGather != "" {
+			return
+		}
+	case "secrets-store":
+		if m.images.SecretsStoreMustGather != "" {
+			return
+		}
+	case "lvms":
+		if m.images.LVMSMustGather != "" {
+			return
 		}
 	}
+	m.setImageLocked(name, image)
+}
+
+func (m *Manager) setImageLocked(name, image string) {
+	switch name {
+	case "cnv":
+		m.images.CNVMustGather = image
+	case "odf":
+		m.images.ODFMustGather = image
+	case "acm":
+		m.images.ACMMustGather = image
+	case "logging":
+		m.images.LoggingMustGather = image
+	case "gitops":
+		m.images.GitOpsMustGather = image
+	case "service-mesh":
+		m.images.ServiceMeshMustGather = image
+	case "mtc":
+		m.images.MTCMustGather = image
+	case "serverless":
+		m.images.ServerlessMustGather = image
+	case "mce":
+		m.images.MCEMustGather = image
+	case "local-storage":
+		m.images.LocalStorageMustGather = image
+	case "sandboxed":
+		m.images.SandboxedMustGather = image
+	case "nhc":
+		m.images.NHCMustGather = image
+	case "numa":
+		m.images.NUMAMustGather = image
+	case "ptp":
+		m.images.PTPMustGather = image
+	case "secrets-store":
+		m.images.SecretsStoreMustGather = image
+	case "lvms":
+		m.images.LVMSMustGather = image
+	}
+}
+
+// StopJob cancels a running job.
+func (m *Manager) StopJob(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cancel, ok := m.cancels[id]
+	if !ok {
+		return false
+	}
+	cancel()
+	return true
 }
 
 func (m *Manager) GetJob(id string) *Job {
@@ -158,7 +296,7 @@ func sanitizeID(id string) string {
 	return id
 }
 
-func (m *Manager) StartGather(gatherType GatherType, anonymize bool, since string) string {
+func (m *Manager) StartGather(gatherType GatherType, anonymize bool, since string, opts GatherOpts) string {
 	if since != "" && !validSince.MatchString(since) {
 		since = ""
 	}
@@ -185,6 +323,24 @@ func (m *Manager) StartGather(gatherType GatherType, anonymize bool, since strin
 		prefix = "gitops"
 	case GatherServerless:
 		prefix = "serverless"
+	case GatherMCE:
+		prefix = "mce"
+	case GatherNetObserv:
+		prefix = "netobserv"
+	case GatherLocalStorage:
+		prefix = "local-storage"
+	case GatherSandboxed:
+		prefix = "sandboxed"
+	case GatherNHC:
+		prefix = "nhc"
+	case GatherNUMA:
+		prefix = "numa"
+	case GatherPTP:
+		prefix = "ptp"
+	case GatherSecretsStore:
+		prefix = "secrets-store"
+	case GatherLVMS:
+		prefix = "lvms"
 	case GatherAudit:
 		prefix = "audit"
 	case GatherAll:
@@ -204,13 +360,16 @@ func (m *Manager) StartGather(gatherType GatherType, anonymize bool, since strin
 		Since:     since,
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), gatherTimeout)
+
 	m.mu.Lock()
 	m.jobs[id] = job
+	m.cancels[id] = cancel
 	m.mu.Unlock()
 
 	metrics.MustGatherJobsTotal.WithLabelValues(string(gatherType)).Inc()
 	metrics.MustGatherJobsActive.Inc()
-	go m.runGather(job)
+	go m.runGather(ctx, job, opts)
 	return id
 }
 
@@ -242,10 +401,7 @@ var gatherErrorPatterns = []string{
 	"no route to host",
 }
 
-func (m *Manager) runCommand(job *Job, name string, args ...string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), gatherTimeout)
-	defer cancel()
-
+func (m *Manager) runCommand(ctx context.Context, job *Job, name string, args ...string) error {
 	cmd := exec.CommandContext(ctx, name, args...)
 
 	pr, pw := io.Pipe()
@@ -272,6 +428,9 @@ func (m *Manager) runCommand(job *Job, name string, args ...string) error {
 
 	if ctx.Err() == context.DeadlineExceeded {
 		return fmt.Errorf("timed out after %v — the process was killed", gatherTimeout)
+	}
+	if ctx.Err() == context.Canceled {
+		return fmt.Errorf("stopped by user")
 	}
 	if err != nil {
 		return err
@@ -301,11 +460,16 @@ func gatherHadErrors(logOutput string) string {
 	return fmt.Sprintf("%d error(s) detected during gather", len(found))
 }
 
-func (m *Manager) runGather(job *Job) {
+func (m *Manager) runGather(ctx context.Context, job *Job, opts GatherOpts) {
 	defer metrics.MustGatherJobsActive.Dec()
+	defer func() {
+		m.mu.Lock()
+		delete(m.cancels, job.ID)
+		m.mu.Unlock()
+	}()
 
 	if job.Type == GatherEtcdBackup {
-		m.runEtcdBackup(job)
+		m.runEtcdBackup(ctx, job)
 		return
 	}
 
@@ -327,60 +491,153 @@ func (m *Manager) runGather(job *Job) {
 		sinceArg = "--since=" + job.Since
 	}
 
-	defaultArgs := []string{"adm", "must-gather", "--dest-dir=" + destDir}
-	if m.images.DefaultMustGather != "" {
-		defaultArgs = append(defaultArgs, "--image="+m.images.DefaultMustGather)
+	// For Gather All, each step gets its own subdirectory for cleaner archives.
+	stepDestDir := func(name string) string {
+		if job.Type == GatherAll {
+			d := filepath.Join(destDir, "must-gather-"+name)
+			os.MkdirAll(d, 0700)
+			return d
+		}
+		return destDir
 	}
-	if sinceArg != "" {
-		defaultArgs = append(defaultArgs, sinceArg)
-	}
-	auditArgs := []string{"adm", "must-gather", "--dest-dir=" + destDir}
-	if m.images.DefaultMustGather != "" {
-		auditArgs = append(auditArgs, "--image="+m.images.DefaultMustGather)
-	}
-	if sinceArg != "" {
-		auditArgs = append(auditArgs, sinceArg)
-	}
-	auditArgs = append(auditArgs, "--", "/usr/bin/gather_audit_logs")
 
-	imageArgs := func(image string) []string {
-		args := []string{"adm", "must-gather", "--dest-dir=" + destDir, "--image=" + image}
+	addCommonArgs := func(args []string) []string {
 		if sinceArg != "" {
 			args = append(args, sinceArg)
+		}
+		if opts.NodeName != "" {
+			args = append(args, "--node-name="+opts.NodeName)
+		}
+		if opts.NodeSelector != "" {
+			args = append(args, "--node-selector="+opts.NodeSelector)
+		}
+		if opts.HostNetwork {
+			args = append(args, "--host-network=true")
 		}
 		return args
 	}
 
+	mkDefaultArgs := func(dir string) []string {
+		args := []string{"adm", "must-gather", "--dest-dir=" + dir}
+		if m.images.DefaultMustGather != "" {
+			args = append(args, "--image="+m.images.DefaultMustGather)
+		}
+		return addCommonArgs(args)
+	}
+
+	mkAuditArgs := func(dir string) []string {
+		args := []string{"adm", "must-gather", "--dest-dir=" + dir}
+		if m.images.DefaultMustGather != "" {
+			args = append(args, "--image="+m.images.DefaultMustGather)
+		}
+		args = addCommonArgs(args)
+		args = append(args, "--", "/usr/bin/gather_audit_logs")
+		return args
+	}
+
+	imageArgs := func(dir, image string) []string {
+		args := []string{"adm", "must-gather", "--dest-dir=" + dir, "--image=" + image}
+		return addCommonArgs(args)
+	}
+
 	switch job.Type {
 	case GatherDefault:
-		steps = append(steps, gatherStep{"Default must-gather", defaultArgs})
+		steps = append(steps, gatherStep{"Default must-gather", mkDefaultArgs(destDir)})
 	case GatherVirtualization:
-		steps = append(steps, gatherStep{"Virtualization must-gather", imageArgs(m.images.CNVMustGather)})
+		steps = append(steps, gatherStep{"Virtualization must-gather", imageArgs(destDir, m.images.CNVMustGather)})
 	case GatherODF:
-		steps = append(steps, gatherStep{"ODF must-gather", imageArgs(m.images.ODFMustGather)})
+		steps = append(steps, gatherStep{"ODF must-gather", imageArgs(destDir, m.images.ODFMustGather)})
 	case GatherACM:
-		steps = append(steps, gatherStep{"ACM must-gather", imageArgs(m.images.ACMMustGather)})
+		steps = append(steps, gatherStep{"ACM must-gather", imageArgs(destDir, m.images.ACMMustGather)})
 	case GatherLogging:
-		steps = append(steps, gatherStep{"Logging must-gather", imageArgs(m.images.LoggingMustGather)})
+		steps = append(steps, gatherStep{"Logging must-gather", imageArgs(destDir, m.images.LoggingMustGather)})
 	case GatherServiceMesh:
-		steps = append(steps, gatherStep{"Service Mesh must-gather", imageArgs(m.images.ServiceMeshMustGather)})
+		steps = append(steps, gatherStep{"Service Mesh must-gather", imageArgs(destDir, m.images.ServiceMeshMustGather)})
 	case GatherCompliance:
-		steps = append(steps, gatherStep{"Compliance must-gather", imageArgs(m.images.ComplianceMustGather)})
+		steps = append(steps, gatherStep{"Compliance must-gather", imageArgs(destDir, m.images.ComplianceMustGather)})
 	case GatherMTC:
-		steps = append(steps, gatherStep{"MTC must-gather", imageArgs(m.images.MTCMustGather)})
+		steps = append(steps, gatherStep{"MTC must-gather", imageArgs(destDir, m.images.MTCMustGather)})
 	case GatherGitOps:
-		steps = append(steps, gatherStep{"GitOps must-gather", imageArgs(m.images.GitOpsMustGather)})
+		steps = append(steps, gatherStep{"GitOps must-gather", imageArgs(destDir, m.images.GitOpsMustGather)})
 	case GatherServerless:
-		steps = append(steps, gatherStep{"Serverless must-gather", imageArgs(m.images.ServerlessMustGather)})
+		steps = append(steps, gatherStep{"Serverless must-gather", imageArgs(destDir, m.images.ServerlessMustGather)})
+	case GatherMCE:
+		steps = append(steps, gatherStep{"MCE must-gather", imageArgs(destDir, m.images.MCEMustGather)})
+	case GatherNetObserv:
+		steps = append(steps, gatherStep{"Network Observability must-gather", imageArgs(destDir, m.images.NetObservMustGather)})
+	case GatherLocalStorage:
+		steps = append(steps, gatherStep{"Local Storage must-gather", imageArgs(destDir, m.images.LocalStorageMustGather)})
+	case GatherSandboxed:
+		steps = append(steps, gatherStep{"Sandboxed Containers must-gather", imageArgs(destDir, m.images.SandboxedMustGather)})
+	case GatherNHC:
+		steps = append(steps, gatherStep{"Node Health Check must-gather", imageArgs(destDir, m.images.NHCMustGather)})
+	case GatherNUMA:
+		steps = append(steps, gatherStep{"NUMA Resources must-gather", imageArgs(destDir, m.images.NUMAMustGather)})
+	case GatherPTP:
+		steps = append(steps, gatherStep{"PTP must-gather", imageArgs(destDir, m.images.PTPMustGather)})
+	case GatherSecretsStore:
+		steps = append(steps, gatherStep{"Secrets Store CSI must-gather", imageArgs(destDir, m.images.SecretsStoreMustGather)})
+	case GatherLVMS:
+		steps = append(steps, gatherStep{"LVMS must-gather", imageArgs(destDir, m.images.LVMSMustGather)})
 	case GatherAudit:
-		steps = append(steps, gatherStep{"Audit logs", auditArgs})
+		steps = append(steps, gatherStep{"Audit logs", mkAuditArgs(destDir)})
 	case GatherAll:
-		steps = append(steps,
-			gatherStep{"Default must-gather", defaultArgs},
-			gatherStep{"Virtualization must-gather", imageArgs(m.images.CNVMustGather)},
-			gatherStep{"ODF must-gather", imageArgs(m.images.ODFMustGather)},
-			gatherStep{"Audit logs", auditArgs},
-		)
+		steps = append(steps, gatherStep{"Default must-gather", mkDefaultArgs(stepDestDir("default"))})
+		if m.detected[GatherVirtualization] && m.images.CNVMustGather != "" {
+			steps = append(steps, gatherStep{"Virtualization must-gather", imageArgs(stepDestDir("virtualization"), m.images.CNVMustGather)})
+		}
+		if m.detected[GatherODF] && m.images.ODFMustGather != "" {
+			steps = append(steps, gatherStep{"ODF must-gather", imageArgs(stepDestDir("odf"), m.images.ODFMustGather)})
+		}
+		if m.detected[GatherACM] && m.images.ACMMustGather != "" {
+			steps = append(steps, gatherStep{"ACM must-gather", imageArgs(stepDestDir("acm"), m.images.ACMMustGather)})
+		}
+		if m.detected[GatherLogging] && m.images.LoggingMustGather != "" {
+			steps = append(steps, gatherStep{"Logging must-gather", imageArgs(stepDestDir("logging"), m.images.LoggingMustGather)})
+		}
+		if m.detected[GatherServiceMesh] && m.images.ServiceMeshMustGather != "" {
+			steps = append(steps, gatherStep{"Service Mesh must-gather", imageArgs(stepDestDir("service-mesh"), m.images.ServiceMeshMustGather)})
+		}
+		if m.detected[GatherCompliance] {
+			steps = append(steps, gatherStep{"Compliance must-gather", imageArgs(stepDestDir("compliance"), m.images.ComplianceMustGather)})
+		}
+		if m.detected[GatherMTC] && m.images.MTCMustGather != "" {
+			steps = append(steps, gatherStep{"MTC must-gather", imageArgs(stepDestDir("mtc"), m.images.MTCMustGather)})
+		}
+		if m.detected[GatherGitOps] && m.images.GitOpsMustGather != "" {
+			steps = append(steps, gatherStep{"GitOps must-gather", imageArgs(stepDestDir("gitops"), m.images.GitOpsMustGather)})
+		}
+		if m.detected[GatherServerless] && m.images.ServerlessMustGather != "" {
+			steps = append(steps, gatherStep{"Serverless must-gather", imageArgs(stepDestDir("serverless"), m.images.ServerlessMustGather)})
+		}
+		if m.detected[GatherMCE] && m.images.MCEMustGather != "" {
+			steps = append(steps, gatherStep{"MCE must-gather", imageArgs(stepDestDir("mce"), m.images.MCEMustGather)})
+		}
+		if m.detected[GatherNetObserv] && m.images.NetObservMustGather != "" {
+			steps = append(steps, gatherStep{"Network Observability must-gather", imageArgs(stepDestDir("netobserv"), m.images.NetObservMustGather)})
+		}
+		if m.detected[GatherLocalStorage] && m.images.LocalStorageMustGather != "" {
+			steps = append(steps, gatherStep{"Local Storage must-gather", imageArgs(stepDestDir("local-storage"), m.images.LocalStorageMustGather)})
+		}
+		if m.detected[GatherSandboxed] && m.images.SandboxedMustGather != "" {
+			steps = append(steps, gatherStep{"Sandboxed Containers must-gather", imageArgs(stepDestDir("sandboxed"), m.images.SandboxedMustGather)})
+		}
+		if m.detected[GatherNHC] && m.images.NHCMustGather != "" {
+			steps = append(steps, gatherStep{"Node Health Check must-gather", imageArgs(stepDestDir("nhc"), m.images.NHCMustGather)})
+		}
+		if m.detected[GatherNUMA] && m.images.NUMAMustGather != "" {
+			steps = append(steps, gatherStep{"NUMA Resources must-gather", imageArgs(stepDestDir("numa"), m.images.NUMAMustGather)})
+		}
+		if m.detected[GatherPTP] && m.images.PTPMustGather != "" {
+			steps = append(steps, gatherStep{"PTP must-gather", imageArgs(stepDestDir("ptp"), m.images.PTPMustGather)})
+		}
+		if m.detected[GatherSecretsStore] && m.images.SecretsStoreMustGather != "" {
+			steps = append(steps, gatherStep{"Secrets Store CSI must-gather", imageArgs(stepDestDir("secrets-store"), m.images.SecretsStoreMustGather)})
+		}
+		if m.detected[GatherLVMS] && m.images.LVMSMustGather != "" {
+			steps = append(steps, gatherStep{"LVMS must-gather", imageArgs(stepDestDir("lvms"), m.images.LVMSMustGather)})
+		}
+		steps = append(steps, gatherStep{"Audit logs", mkAuditArgs(stepDestDir("audit"))})
 	}
 
 	extraSteps := 1
@@ -394,10 +651,15 @@ func (m *Manager) runGather(job *Job) {
 		m.setStep(job, stepNum, totalSteps, s.label)
 		m.appendLog(job, fmt.Sprintf("=== Step %d/%d: %s ===", stepNum, totalSteps, s.label))
 
-		err := m.runCommand(job, "oc", s.args...)
+		err := m.runCommand(ctx, job, "oc", s.args...)
 		if err != nil {
-			if job.Type == GatherAll && i > 0 {
+			if ctx.Err() != nil {
+				m.setError(job, "Stopped by user")
+				return
+			}
+			if job.Type == GatherAll {
 				m.appendLog(job, fmt.Sprintf("Warning: %s failed (continuing): %v", s.label, err))
+				m.appendLog(job, fmt.Sprintf("=== %s failed ===", s.label))
 				continue
 			}
 			m.setError(job, fmt.Sprintf("%s failed: %v", s.label, err))
@@ -413,7 +675,7 @@ func (m *Manager) runGather(job *Job) {
 		m.appendLog(job, fmt.Sprintf("=== Step %d/%d: Anonymizing data ===", stepNum, totalSteps))
 
 		anonDir := destDir + "-anonymized"
-		err := m.runCommand(job, "must-gather-clean", "-i", destDir, "-o", anonDir)
+		err := m.runCommand(ctx, job, "must-gather-clean", "-i", destDir, "-o", anonDir)
 		if err != nil {
 			m.appendLog(job, fmt.Sprintf("must-gather-clean not available (%v). Falling back to IP obfuscation...", err))
 			if err := m.fallbackAnonymize(destDir); err != nil {
@@ -436,11 +698,12 @@ func (m *Manager) runGather(job *Job) {
 	m.appendLog(job, fmt.Sprintf("=== Step %d/%d: Creating tar.gz archive ===", tarStepNum, totalSteps))
 
 	tarFile := filepath.Join(m.workDir, tarName+".tar.gz")
-	err := m.runCommand(job, "tar", "-czf", tarFile, "-C", filepath.Dir(finalDir), filepath.Base(finalDir))
+	err := m.runCommand(ctx, job, "tar", "-czf", tarFile, "-C", filepath.Dir(finalDir), filepath.Base(finalDir))
 	if err != nil {
 		m.setError(job, fmt.Sprintf("tar failed: %v", err))
 		return
 	}
+	m.appendLog(job, "=== Creating tar.gz archive complete ===")
 
 	m.mu.Lock()
 	logSnapshot := job.LogOutput
@@ -465,7 +728,7 @@ func (m *Manager) runGather(job *Job) {
 	m.mu.Unlock()
 }
 
-func (m *Manager) runEtcdBackup(job *Job) {
+func (m *Manager) runEtcdBackup(ctx context.Context, job *Job) {
 	destDir := filepath.Join(m.workDir, job.ID)
 	if err := os.MkdirAll(destDir, 0700); err != nil {
 		m.setError(job, fmt.Sprintf("create dir: %v", err))
@@ -500,7 +763,7 @@ func (m *Manager) runEtcdBackup(job *Job) {
 		ls -la ${BACKUP_DIR}/
 	'`
 
-	err = m.runCommand(job, "oc", "debug", "node/"+masterNode, "--", "/bin/bash", "-c", backupScript)
+	err = m.runCommand(ctx, job, "oc", "debug", "node/"+masterNode, "--", "/bin/bash", "-c", backupScript)
 	if err != nil {
 		m.setError(job, fmt.Sprintf("etcd backup failed: %v", err))
 		return
@@ -533,7 +796,7 @@ func (m *Manager) runEtcdBackup(job *Job) {
 	safeID := sanitizeID(job.ID)
 	tarFile := filepath.Join(m.workDir, safeID+".tar.gz")
 
-	copyCmd := exec.Command("oc", "debug", "node/"+masterNode, "--",
+	copyCmd := exec.CommandContext(ctx, "oc", "debug", "node/"+masterNode, "--",
 		"/bin/bash", "-c", `chroot /host tar czf - -C "$1" .`, "--", backupDir)
 	outFile, err := os.Create(tarFile)
 	if err != nil {
