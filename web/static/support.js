@@ -99,12 +99,13 @@
                 nodeNameSelect.appendChild(opt);
             }
 
-            // Collect unique label key=value pairs (skip kubernetes.io internal labels)
+            // Collect unique label key=value pairs (skip internal k8s labels)
+            const internalLabelPattern = /kubernetes\.io\/|k8s\.io\//;
             const labelSet = new Set();
             for (const node of nodes) {
                 if (!node.labels) continue;
                 for (const [k, v] of Object.entries(node.labels)) {
-                    if (k.includes('kubernetes.io/') || k.includes('k8s.io/')) continue;
+                    if (internalLabelPattern.test(k)) continue;
                     labelSet.add(k + '=' + v);
                 }
             }
