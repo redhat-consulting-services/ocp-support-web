@@ -96,13 +96,49 @@
                                 <div class="gather-type-card__title">Serverless</div>
                                 <div class="gather-type-card__desc">OpenShift Serverless / Knative</div>
                             </div>
+                            <div class="gather-type-card" data-type="mce" style="display:none;">
+                                <div class="gather-type-card__title">MCE</div>
+                                <div class="gather-type-card__desc">Multicluster Engine / Hosted Control Planes</div>
+                            </div>
+                            <div class="gather-type-card" data-type="netobserv" style="display:none;">
+                                <div class="gather-type-card__title">Network Observability</div>
+                                <div class="gather-type-card__desc">Network Observability Operator</div>
+                            </div>
+                            <div class="gather-type-card" data-type="local-storage" style="display:none;">
+                                <div class="gather-type-card__title">Local Storage</div>
+                                <div class="gather-type-card__desc">Local Storage Operator</div>
+                            </div>
+                            <div class="gather-type-card" data-type="sandboxed" style="display:none;">
+                                <div class="gather-type-card__title">Sandboxed Containers</div>
+                                <div class="gather-type-card__desc">OpenShift Sandboxed Containers</div>
+                            </div>
+                            <div class="gather-type-card" data-type="nhc" style="display:none;">
+                                <div class="gather-type-card__title">Node Health Check</div>
+                                <div class="gather-type-card__desc">Workload Availability Operators</div>
+                            </div>
+                            <div class="gather-type-card" data-type="numa" style="display:none;">
+                                <div class="gather-type-card__title">NUMA Resources</div>
+                                <div class="gather-type-card__desc">NUMA Resources Operator</div>
+                            </div>
+                            <div class="gather-type-card" data-type="ptp" style="display:none;">
+                                <div class="gather-type-card__title">PTP</div>
+                                <div class="gather-type-card__desc">PTP Operator</div>
+                            </div>
+                            <div class="gather-type-card" data-type="secrets-store" style="display:none;">
+                                <div class="gather-type-card__title">Secrets Store CSI</div>
+                                <div class="gather-type-card__desc">Secrets Store CSI Driver Operator</div>
+                            </div>
+                            <div class="gather-type-card" data-type="lvms" style="display:none;">
+                                <div class="gather-type-card__title">LVMS</div>
+                                <div class="gather-type-card__desc">LVM Storage Operator</div>
+                            </div>
                             <div class="gather-type-card" data-type="audit">
                                 <div class="gather-type-card__title">Audit Logs</div>
                                 <div class="gather-type-card__desc">API server audit logging records</div>
                             </div>
                             <div class="gather-type-card" data-type="all">
                                 <div class="gather-type-card__title">Gather All</div>
-                                <div class="gather-type-card__desc">Default + Virtualization + ODF + Audit</div>
+                                <div class="gather-type-card__desc" id="all-desc">Default + all detected operators + Audit</div>
                             </div>
                         </div>
 
@@ -147,6 +183,44 @@
                                     <option value="48h">Last 48 hours</option>
                                 </select>
                                 <span class="pf-v5-u-font-size-sm pf-v5-u-color-200" id="since-hint">Collect all logs (no time limit)</span>
+                            </div>
+                        </div>
+                        <div class="pf-v5-u-mb-md">
+                            <button class="pf-v5-c-button pf-m-link pf-m-small" type="button" id="advanced-toggle" style="padding:0;">
+                                <span id="advanced-arrow">&#9654;</span> Advanced Options
+                            </button>
+                            <div id="advanced-options" class="hidden" style="margin-top:12px;">
+                                <div class="pf-v5-l-flex pf-m-align-items-center pf-m-gap-lg pf-v5-u-mb-md" style="flex-wrap:wrap;">
+                                    <div class="pf-v5-l-flex pf-m-align-items-center pf-m-gap-sm">
+                                        <span class="pf-v5-u-font-size-sm pf-v5-u-font-weight-bold">Node:</span>
+                                        <select class="pf-v5-c-form-control" id="node-name-select" style="width:auto;min-width:180px;">
+                                            <option value="">All nodes (default)</option>
+                                        </select>
+                                    </div>
+                                    <div class="pf-v5-l-flex pf-m-align-items-center pf-m-gap-sm">
+                                        <span class="pf-v5-u-font-size-sm pf-v5-u-font-weight-bold">Node selector:</span>
+                                        <select class="pf-v5-c-form-control" id="node-selector-select" style="width:auto;min-width:220px;">
+                                            <option value="">None (default)</option>
+                                        </select>
+                                    </div>
+                                    <div class="pf-v5-l-flex pf-m-align-items-center pf-m-gap-sm">
+                                        <span class="pf-v5-u-font-size-sm pf-v5-u-font-weight-bold">Host network:</span>
+                                        <div class="pf-v5-c-toggle-group" id="host-network-toggle">
+                                            <div class="pf-v5-c-toggle-group__item">
+                                                <button class="pf-v5-c-toggle-group__button pf-m-selected" data-hostnet="false" type="button">
+                                                    <span class="pf-v5-c-toggle-group__text">Off</span>
+                                                </button>
+                                            </div>
+                                            <div class="pf-v5-c-toggle-group__item">
+                                                <button class="pf-v5-c-toggle-group__button" data-hostnet="true" type="button">
+                                                    <span class="pf-v5-c-toggle-group__text">On</span>
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <span class="pf-v5-u-font-size-sm pf-v5-u-color-200">Use host network for gathering</span>
+                                    </div>
+                                </div>
+                                <p class="pf-v5-u-font-size-xs pf-v5-u-color-300">Node and node selector cannot be used together. Selecting one disables the other.</p>
                             </div>
                         </div>
                         <div class="pf-v5-l-flex pf-m-align-items-center pf-m-justify-content-flex-end">

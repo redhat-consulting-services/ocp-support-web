@@ -21,16 +21,25 @@ type OpenShiftConfig struct {
 }
 
 type ImageConfig struct {
-	DefaultMustGather     string
-	CNVMustGather         string
-	ODFMustGather         string
-	ACMMustGather         string
-	LoggingMustGather     string
-	ServiceMeshMustGather string
-	ComplianceMustGather  string
-	MTCMustGather         string
-	GitOpsMustGather      string
-	ServerlessMustGather  string
+	DefaultMustGather         string
+	CNVMustGather             string
+	ODFMustGather             string
+	ACMMustGather             string
+	LoggingMustGather         string
+	ServiceMeshMustGather     string
+	ComplianceMustGather      string
+	MTCMustGather             string
+	GitOpsMustGather          string
+	ServerlessMustGather      string
+	MCEMustGather             string
+	NetObservMustGather       string
+	LocalStorageMustGather    string
+	SandboxedMustGather       string
+	NHCMustGather             string
+	NUMAMustGather            string
+	PTPMustGather             string
+	SecretsStoreMustGather    string
+	LVMSMustGather            string
 }
 
 const saTokenPath = "/var/run/secrets/kubernetes.io/serviceaccount/token"
@@ -47,15 +56,24 @@ func Load() (*AppConfig, error) {
 		},
 		Images: ImageConfig{
 			DefaultMustGather: os.Getenv("MUST_GATHER_IMAGE_DEFAULT"),
-			CNVMustGather:     envOr("MUST_GATHER_IMAGE_CNV", "registry.redhat.io/container-native-virtualization/cnv-must-gather-rhel9:v4.17.0"),
-			ODFMustGather:         envOr("MUST_GATHER_IMAGE_ODF", "registry.redhat.io/odf4/ocs-must-gather-rhel9:latest"),
+			CNVMustGather:         os.Getenv("MUST_GATHER_IMAGE_CNV"),
+			ODFMustGather:         os.Getenv("MUST_GATHER_IMAGE_ODF"),
 			ACMMustGather:         os.Getenv("MUST_GATHER_IMAGE_ACM"),
-			LoggingMustGather:     envOr("MUST_GATHER_IMAGE_LOGGING", "registry.redhat.io/openshift-logging/cluster-logging-must-gather-rhel9:latest"),
+			LoggingMustGather:     os.Getenv("MUST_GATHER_IMAGE_LOGGING"),
 			ServiceMeshMustGather: os.Getenv("MUST_GATHER_IMAGE_SERVICE_MESH"),
 			ComplianceMustGather:  envOr("MUST_GATHER_IMAGE_COMPLIANCE", "registry.redhat.io/compliance/openshift-compliance-must-gather-rhel8:latest"),
 			MTCMustGather:         os.Getenv("MUST_GATHER_IMAGE_MTC"),
 			GitOpsMustGather:      os.Getenv("MUST_GATHER_IMAGE_GITOPS"),
 			ServerlessMustGather:  os.Getenv("MUST_GATHER_IMAGE_SERVERLESS"),
+			MCEMustGather:             envOr("MUST_GATHER_IMAGE_MCE", "registry.redhat.io/multicluster-engine/must-gather-rhel8"),
+			NetObservMustGather:       envOr("MUST_GATHER_IMAGE_NETOBSERV", "quay.io/netobserv/must-gather"),
+			LocalStorageMustGather:    os.Getenv("MUST_GATHER_IMAGE_LOCAL_STORAGE"),
+			SandboxedMustGather:       os.Getenv("MUST_GATHER_IMAGE_SANDBOXED"),
+			NHCMustGather:             os.Getenv("MUST_GATHER_IMAGE_NHC"),
+			NUMAMustGather:            os.Getenv("MUST_GATHER_IMAGE_NUMA"),
+			PTPMustGather:             os.Getenv("MUST_GATHER_IMAGE_PTP"),
+			SecretsStoreMustGather:    os.Getenv("MUST_GATHER_IMAGE_SECRETS_STORE"),
+			LVMSMustGather:            os.Getenv("MUST_GATHER_IMAGE_LVMS"),
 		},
 	}
 

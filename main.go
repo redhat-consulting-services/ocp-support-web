@@ -22,16 +22,25 @@ func main() {
 	}
 
 	mgr, err := mustgather.NewManager(cfg.MustGatherDir, mustgather.ImageConfig{
-		DefaultMustGather:     cfg.Images.DefaultMustGather,
-		CNVMustGather:         cfg.Images.CNVMustGather,
-		ODFMustGather:         cfg.Images.ODFMustGather,
-		ACMMustGather:         cfg.Images.ACMMustGather,
-		LoggingMustGather:     cfg.Images.LoggingMustGather,
-		ServiceMeshMustGather: cfg.Images.ServiceMeshMustGather,
-		ComplianceMustGather:  cfg.Images.ComplianceMustGather,
-		MTCMustGather:         cfg.Images.MTCMustGather,
-		GitOpsMustGather:      cfg.Images.GitOpsMustGather,
-		ServerlessMustGather:  cfg.Images.ServerlessMustGather,
+		DefaultMustGather:      cfg.Images.DefaultMustGather,
+		CNVMustGather:          cfg.Images.CNVMustGather,
+		ODFMustGather:          cfg.Images.ODFMustGather,
+		ACMMustGather:          cfg.Images.ACMMustGather,
+		LoggingMustGather:      cfg.Images.LoggingMustGather,
+		ServiceMeshMustGather:  cfg.Images.ServiceMeshMustGather,
+		ComplianceMustGather:   cfg.Images.ComplianceMustGather,
+		MTCMustGather:          cfg.Images.MTCMustGather,
+		GitOpsMustGather:       cfg.Images.GitOpsMustGather,
+		ServerlessMustGather:   cfg.Images.ServerlessMustGather,
+		MCEMustGather:          cfg.Images.MCEMustGather,
+		NetObservMustGather:    cfg.Images.NetObservMustGather,
+		LocalStorageMustGather: cfg.Images.LocalStorageMustGather,
+		SandboxedMustGather:    cfg.Images.SandboxedMustGather,
+		NHCMustGather:          cfg.Images.NHCMustGather,
+		NUMAMustGather:         cfg.Images.NUMAMustGather,
+		PTPMustGather:          cfg.Images.PTPMustGather,
+		SecretsStoreMustGather: cfg.Images.SecretsStoreMustGather,
+		LVMSMustGather:         cfg.Images.LVMSMustGather,
 	})
 	if err != nil {
 		log.Fatalf("Failed to create must-gather manager: %v", err)

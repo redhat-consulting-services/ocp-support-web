@@ -180,6 +180,52 @@
     line-height: 1.4;
 }
 
+/* Step tabs for multi-step gather jobs */
+.step-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 8px;
+}
+.step-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    border: 1px solid #d2d2d2;
+    border-radius: 4px;
+    background: #f0f0f0;
+    color: #6a6e73;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    white-space: nowrap;
+}
+.step-tab:hover {
+    background: #e7f1fa;
+    border-color: #06c;
+}
+.step-tab.active {
+    background: #fff;
+    border-color: #06c;
+    color: #151515;
+    box-shadow: 0 -2px 0 #06c inset;
+}
+.step-tab.step-running {
+    color: #06c;
+}
+.step-tab.step-complete {
+    color: #3e8635;
+}
+.step-tab.step-failed {
+    color: #c9190b;
+}
+.step-tab .step-icon {
+    font-size: 13px;
+    line-height: 1;
+}
+
 .pf-v5-c-page {
     min-height: 100vh;
 }

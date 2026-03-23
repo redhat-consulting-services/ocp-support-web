@@ -73,6 +73,32 @@ type NodeStatus struct {
 	Roles  []string `json:"roles"`
 }
 
+type NodeInfo struct {
+	Name   string            `json:"name"`
+	Labels map[string]string `json:"labels"`
+}
+
+func (c *Client) GetNodes() ([]NodeInfo, error) {
+	data, err := c.get("/api/v1/nodes")
+	if err != nil {
+		return nil, err
+	}
+	var nodes []NodeInfo
+	for _, item := range jsonArray(data, "items") {
+		node := item.(map[string]interface{})
+		name := jsonPath(node, "metadata", "name")
+		labels := jsonMap(node, "metadata", "labels")
+		labelMap := make(map[string]string)
+		for k, v := range labels {
+			if s, ok := v.(string); ok {
+				labelMap[k] = s
+			}
+		}
+		nodes = append(nodes, NodeInfo{Name: name, Labels: labelMap})
+	}
+	return nodes, nil
+}
+
 type ODFStatus struct {
 	Installed bool   `json:"installed"`
 	Name      string `json:"name,omitempty"`
@@ -298,11 +324,14 @@ func (c *Client) GetClusterHealth() (*ClusterHealth, error) {
 }
 
 type ClusterCapabilities struct {
-	CNV         bool   `json:"cnv"`
-	ODF         bool   `json:"odf"`
-	ACM         bool   `json:"acm"`
-	ACMVersion  string `json:"acmVersion,omitempty"`
-	Logging     bool   `json:"logging"`
+	CNV            bool   `json:"cnv"`
+	CNVVersion     string `json:"cnvVersion,omitempty"`
+	ODF            bool   `json:"odf"`
+	ODFVersion     string `json:"odfVersion,omitempty"`
+	ACM            bool   `json:"acm"`
+	ACMVersion     string `json:"acmVersion,omitempty"`
+	Logging        bool   `json:"logging"`
+	LoggingVersion string `json:"loggingVersion,omitempty"`
 	ServiceMesh bool   `json:"serviceMesh"`
 	Compliance  bool   `json:"compliance"`
 	MTC         bool   `json:"mtc"`
@@ -310,8 +339,25 @@ type ClusterCapabilities struct {
 	GitOpsVersion     string `json:"gitopsVersion,omitempty"`
 	Serverless        bool   `json:"serverless"`
 	ServerlessVersion string `json:"serverlessVersion,omitempty"`
-	ServiceMeshVersion string `json:"serviceMeshVersion,omitempty"`
-	MTCVersion        string `json:"mtcVersion,omitempty"`
+	ServiceMeshVersion   string `json:"serviceMeshVersion,omitempty"`
+	MTCVersion           string `json:"mtcVersion,omitempty"`
+	MCE                  bool   `json:"mce"`
+	MCEVersion           string `json:"mceVersion,omitempty"`
+	NetObserv            bool   `json:"netObserv"`
+	LocalStorage         bool   `json:"localStorage"`
+	LocalStorageVersion  string `json:"localStorageVersion,omitempty"`
+	Sandboxed            bool   `json:"sandboxed"`
+	SandboxedVersion     string `json:"sandboxedVersion,omitempty"`
+	NHC                  bool   `json:"nhc"`
+	NHCVersion           string `json:"nhcVersion,omitempty"`
+	NUMA                 bool   `json:"numa"`
+	NUMAVersion          string `json:"numaVersion,omitempty"`
+	PTP                  bool   `json:"ptp"`
+	PTPVersion           string `json:"ptpVersion,omitempty"`
+	SecretsStore         bool   `json:"secretsStore"`
+	SecretsStoreVersion  string `json:"secretsStoreVersion,omitempty"`
+	LVMS                 bool   `json:"lvms"`
+	LVMSVersion          string `json:"lvmsVersion,omitempty"`
 }
 
 func (c *Client) GetCapabilities() *ClusterCapabilities {
@@ -320,12 +366,14 @@ func (c *Client) GetCapabilities() *ClusterCapabilities {
 	// Check for CNV (HyperConverged)
 	if _, err := c.get("/apis/hco.kubevirt.io/v1beta1/hyperconvergeds"); err == nil {
 		caps.CNV = true
+		caps.CNVVersion = c.csvVersion("openshift-cnv", "kubevirt-hyperconverged-operator.v")
 	}
 
 	// Check for ODF (StorageCluster)
 	if data, err := c.get("/apis/ocs.openshift.io/v1/storageclusters"); err == nil {
 		if items := jsonArray(data, "items"); len(items) > 0 {
 			caps.ODF = true
+			caps.ODFVersion = c.csvVersion("openshift-storage", "ocs-operator.v")
 		}
 	}
 
@@ -346,6 +394,7 @@ func (c *Client) GetCapabilities() *ClusterCapabilities {
 	// Check for OpenShift Logging
 	if _, err := c.get("/apis/logging.openshift.io/v1/clusterloggings"); err == nil {
 		caps.Logging = true
+		caps.LoggingVersion = c.csvVersion("openshift-logging", "cluster-logging.v")
 	}
 
 	// Check for Service Mesh
@@ -375,6 +424,59 @@ func (c *Client) GetCapabilities() *ClusterCapabilities {
 	if _, err := c.get("/apis/operator.knative.dev/v1beta1/knativeservings"); err == nil {
 		caps.Serverless = true
 		caps.ServerlessVersion = c.csvVersion("openshift-serverless", "serverless-operator.v")
+	}
+
+	// Check for Multicluster Engine (hosted control planes)
+	if _, err := c.get("/apis/multicluster.openshift.io/v1/multiclusterengines"); err == nil {
+		caps.MCE = true
+		caps.MCEVersion = c.csvVersion("multicluster-engine", "multicluster-engine.v")
+	}
+
+	// Check for Network Observability
+	if _, err := c.get("/apis/flows.netobserv.io/v1beta2/flowcollectors"); err == nil {
+		caps.NetObserv = true
+	}
+
+	// Check for Local Storage Operator
+	if _, err := c.get("/apis/local.storage.openshift.io/v1/localvolumes"); err == nil {
+		caps.LocalStorage = true
+		caps.LocalStorageVersion = c.csvVersion("openshift-local-storage", "local-storage-operator.v")
+	}
+
+	// Check for OpenShift Sandboxed Containers
+	if _, err := c.get("/apis/kataconfiguration.openshift.io/v1/kataconfigs"); err == nil {
+		caps.Sandboxed = true
+		caps.SandboxedVersion = c.csvVersion("openshift-sandboxed-containers-operator", "sandboxed-containers-operator.v")
+	}
+
+	// Check for Node Health Check
+	if _, err := c.get("/apis/remediation.medik8s.io/v1alpha1/nodehealthchecks"); err == nil {
+		caps.NHC = true
+		caps.NHCVersion = c.csvVersion("openshift-workload-availability", "node-healthcheck-operator.v")
+	}
+
+	// Check for NUMA Resources Operator
+	if _, err := c.get("/apis/nodetopology.openshift.io/v2/numaresourcesschedulers"); err == nil {
+		caps.NUMA = true
+		caps.NUMAVersion = c.csvVersion("openshift-numaresources", "numaresources-operator.v")
+	}
+
+	// Check for PTP Operator
+	if _, err := c.get("/apis/ptp.openshift.io/v1/ptpconfigs"); err == nil {
+		caps.PTP = true
+		caps.PTPVersion = c.csvVersion("openshift-ptp", "ptp-operator.v")
+	}
+
+	// Check for Secrets Store CSI Driver
+	if _, err := c.get("/apis/secrets-store.csi.x-k8s.io/v1/secretproviderclasses"); err == nil {
+		caps.SecretsStore = true
+		caps.SecretsStoreVersion = c.csvVersion("openshift-cluster-csi-drivers", "secrets-store-csi-driver-operator.v")
+	}
+
+	// Check for LVM Storage (LVMS)
+	if _, err := c.get("/apis/lvm.topolvm.io/v1alpha1/lvmclusters"); err == nil {
+		caps.LVMS = true
+		caps.LVMSVersion = c.csvVersion("openshift-lvm-storage", "lvms-operator.v")
 	}
 
 	return caps
