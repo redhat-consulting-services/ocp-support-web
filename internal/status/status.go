@@ -298,8 +298,16 @@ func (c *Client) GetClusterHealth() (*ClusterHealth, error) {
 }
 
 type ClusterCapabilities struct {
-	CNV bool `json:"cnv"`
-	ODF bool `json:"odf"`
+	CNV         bool   `json:"cnv"`
+	ODF         bool   `json:"odf"`
+	ACM         bool   `json:"acm"`
+	ACMVersion  string `json:"acmVersion,omitempty"`
+	Logging     bool   `json:"logging"`
+	ServiceMesh bool   `json:"serviceMesh"`
+	Compliance  bool   `json:"compliance"`
+	MTC         bool   `json:"mtc"`
+	GitOps      bool   `json:"gitops"`
+	Serverless  bool   `json:"serverless"`
 }
 
 func (c *Client) GetCapabilities() *ClusterCapabilities {
@@ -315,6 +323,50 @@ func (c *Client) GetCapabilities() *ClusterCapabilities {
 		if items := jsonArray(data, "items"); len(items) > 0 {
 			caps.ODF = true
 		}
+	}
+
+	// Check for ACM (MultiClusterHub) and extract version
+	if data, err := c.get("/apis/operator.open-cluster-management.io/v1/multiclusterhubs"); err == nil {
+		if items := jsonArray(data, "items"); len(items) > 0 {
+			caps.ACM = true
+			if item, ok := items[0].(map[string]interface{}); ok {
+				if st, ok := item["status"].(map[string]interface{}); ok {
+					if v, ok := st["currentVersion"].(string); ok {
+						caps.ACMVersion = v
+					}
+				}
+			}
+		}
+	}
+
+	// Check for OpenShift Logging
+	if _, err := c.get("/apis/logging.openshift.io/v1/clusterloggings"); err == nil {
+		caps.Logging = true
+	}
+
+	// Check for Service Mesh
+	if _, err := c.get("/apis/maistra.io/v2/servicemeshcontrolplanes"); err == nil {
+		caps.ServiceMesh = true
+	}
+
+	// Check for Compliance Operator
+	if _, err := c.get("/apis/compliance.openshift.io/v1alpha1/compliancescans"); err == nil {
+		caps.Compliance = true
+	}
+
+	// Check for Migration Toolkit for Containers
+	if _, err := c.get("/apis/migration.openshift.io/v1alpha1/migrationcontrollers"); err == nil {
+		caps.MTC = true
+	}
+
+	// Check for OpenShift GitOps
+	if _, err := c.get("/apis/argoproj.io/v1beta1/argocds"); err == nil {
+		caps.GitOps = true
+	}
+
+	// Check for OpenShift Serverless
+	if _, err := c.get("/apis/operator.knative.dev/v1beta1/knativeservings"); err == nil {
+		caps.Serverless = true
 	}
 
 	return caps

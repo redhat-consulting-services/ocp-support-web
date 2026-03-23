@@ -92,6 +92,13 @@
             'default': 'Default Must-Gather',
             'virtualization': 'Virtualization',
             'odf': 'ODF (Storage)',
+            'acm': 'ACM',
+            'logging': 'Logging',
+            'service-mesh': 'Service Mesh',
+            'compliance': 'Compliance',
+            'mtc': 'MTC',
+            'gitops': 'GitOps',
+            'serverless': 'Serverless',
             'audit': 'Audit Logs',
             'all': 'Gather All',
             'etcd-backup': 'Etcd Backup'
@@ -508,9 +515,30 @@
             const caps = await res.json();
             const cnvCard = document.querySelector('.gather-type-card[data-type="virtualization"]');
             const odfCard = document.querySelector('.gather-type-card[data-type="odf"]');
-            const allCard = document.querySelector('.gather-type-card[data-type="all"]');
+            const acmCard = document.querySelector('.gather-type-card[data-type="acm"]');
             if (caps.cnv && cnvCard) cnvCard.style.display = '';
             if (caps.odf && odfCard) odfCard.style.display = '';
+            if (caps.acm && acmCard) {
+                acmCard.style.display = '';
+                if (caps.acmVersion) {
+                    acmCard.querySelector('.gather-type-card__desc').textContent =
+                        'Advanced Cluster Management v' + caps.acmVersion;
+                }
+            }
+            const capMap = {
+                logging: 'logging',
+                serviceMesh: 'service-mesh',
+                compliance: 'compliance',
+                mtc: 'mtc',
+                gitops: 'gitops',
+                serverless: 'serverless'
+            };
+            for (const [capKey, dataType] of Object.entries(capMap)) {
+                if (caps[capKey]) {
+                    const card = document.querySelector('.gather-type-card[data-type="' + dataType + '"]');
+                    if (card) card.style.display = '';
+                }
+            }
         } catch (e) {
             // If capabilities check fails, show all cards
         }

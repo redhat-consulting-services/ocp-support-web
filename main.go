@@ -22,9 +22,16 @@ func main() {
 	}
 
 	mgr, err := mustgather.NewManager(cfg.MustGatherDir, mustgather.ImageConfig{
-		DefaultMustGather: cfg.Images.DefaultMustGather,
-		CNVMustGather:     cfg.Images.CNVMustGather,
-		ODFMustGather:     cfg.Images.ODFMustGather,
+		DefaultMustGather:     cfg.Images.DefaultMustGather,
+		CNVMustGather:         cfg.Images.CNVMustGather,
+		ODFMustGather:         cfg.Images.ODFMustGather,
+		ACMMustGather:         cfg.Images.ACMMustGather,
+		LoggingMustGather:     cfg.Images.LoggingMustGather,
+		ServiceMeshMustGather: cfg.Images.ServiceMeshMustGather,
+		ComplianceMustGather:  cfg.Images.ComplianceMustGather,
+		MTCMustGather:         cfg.Images.MTCMustGather,
+		GitOpsMustGather:      cfg.Images.GitOpsMustGather,
+		ServerlessMustGather:  cfg.Images.ServerlessMustGather,
 	})
 	if err != nil {
 		log.Fatalf("Failed to create must-gather manager: %v", err)

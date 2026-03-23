@@ -127,7 +127,10 @@ func (h *Handler) handleStartGather(w http.ResponseWriter, r *http.Request) {
 	gatherType := mustgather.GatherType(req.Type)
 	switch gatherType {
 	case mustgather.GatherDefault, mustgather.GatherVirtualization, mustgather.GatherODF,
-		mustgather.GatherAudit, mustgather.GatherAll, mustgather.GatherEtcdBackup:
+		mustgather.GatherACM, mustgather.GatherLogging, mustgather.GatherServiceMesh,
+		mustgather.GatherCompliance, mustgather.GatherMTC, mustgather.GatherGitOps,
+		mustgather.GatherServerless, mustgather.GatherAudit, mustgather.GatherAll,
+		mustgather.GatherEtcdBackup:
 		// valid
 	default:
 		jsonError(w, "invalid gather type", 400)
@@ -395,6 +398,9 @@ func (h *Handler) handleEtcdHealth(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	caps := h.st.GetCapabilities()
+	if caps.ACM && caps.ACMVersion != "" {
+		h.mg.SetACMImage("registry.redhat.io/rhacm2/acm-must-gather-rhel9:v" + caps.ACMVersion)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(caps)
 }
