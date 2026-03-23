@@ -526,17 +526,23 @@
                 }
             }
             const capMap = {
-                logging: 'logging',
-                serviceMesh: 'service-mesh',
-                compliance: 'compliance',
-                mtc: 'mtc',
-                gitops: 'gitops',
-                serverless: 'serverless'
+                logging: {type: 'logging'},
+                serviceMesh: {type: 'service-mesh', versionKey: 'serviceMeshVersion', label: 'Service Mesh'},
+                compliance: {type: 'compliance'},
+                mtc: {type: 'mtc', versionKey: 'mtcVersion', label: 'MTC'},
+                gitops: {type: 'gitops', versionKey: 'gitopsVersion', label: 'GitOps'},
+                serverless: {type: 'serverless', versionKey: 'serverlessVersion', label: 'Serverless'}
             };
-            for (const [capKey, dataType] of Object.entries(capMap)) {
+            for (const [capKey, info] of Object.entries(capMap)) {
                 if (caps[capKey]) {
-                    const card = document.querySelector('.gather-type-card[data-type="' + dataType + '"]');
-                    if (card) card.style.display = '';
+                    const card = document.querySelector('.gather-type-card[data-type="' + info.type + '"]');
+                    if (card) {
+                        card.style.display = '';
+                        if (info.versionKey && caps[info.versionKey]) {
+                            card.querySelector('.gather-type-card__desc').textContent =
+                                card.querySelector('.gather-type-card__desc').textContent + ' v' + caps[info.versionKey];
+                        }
+                    }
                 }
             }
         } catch (e) {

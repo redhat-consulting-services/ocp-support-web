@@ -51,11 +51,11 @@ func Load() (*AppConfig, error) {
 			ODFMustGather:         envOr("MUST_GATHER_IMAGE_ODF", "registry.redhat.io/odf4/ocs-must-gather-rhel9:latest"),
 			ACMMustGather:         os.Getenv("MUST_GATHER_IMAGE_ACM"),
 			LoggingMustGather:     envOr("MUST_GATHER_IMAGE_LOGGING", "registry.redhat.io/openshift-logging/cluster-logging-must-gather-rhel9:latest"),
-			ServiceMeshMustGather: envOr("MUST_GATHER_IMAGE_SERVICE_MESH", "registry.redhat.io/openshift-service-mesh/istio-must-gather-rhel9:latest"),
+			ServiceMeshMustGather: os.Getenv("MUST_GATHER_IMAGE_SERVICE_MESH"),
 			ComplianceMustGather:  envOr("MUST_GATHER_IMAGE_COMPLIANCE", "registry.redhat.io/compliance/openshift-compliance-must-gather-rhel8:latest"),
-			MTCMustGather:         envOr("MUST_GATHER_IMAGE_MTC", "registry.redhat.io/rhmtc/openshift-migration-must-gather-rhel8:latest"),
-			GitOpsMustGather:      envOr("MUST_GATHER_IMAGE_GITOPS", "registry.redhat.io/openshift-gitops-1/must-gather-rhel8:latest"),
-			ServerlessMustGather:  envOr("MUST_GATHER_IMAGE_SERVERLESS", "registry.redhat.io/openshift-serverless-1/svls-must-gather-rhel8:latest"),
+			MTCMustGather:         os.Getenv("MUST_GATHER_IMAGE_MTC"),
+			GitOpsMustGather:      os.Getenv("MUST_GATHER_IMAGE_GITOPS"),
+			ServerlessMustGather:  os.Getenv("MUST_GATHER_IMAGE_SERVERLESS"),
 		},
 	}
 

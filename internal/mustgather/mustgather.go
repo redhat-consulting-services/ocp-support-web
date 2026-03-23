@@ -100,12 +100,31 @@ func NewManager(workDir string, images ImageConfig) (*Manager, error) {
 	}, nil
 }
 
-// SetACMImage sets the ACM must-gather image if not already configured.
-func (m *Manager) SetACMImage(image string) {
+// SetImageIfEmpty sets a must-gather image if not already configured.
+func (m *Manager) SetImageIfEmpty(name, image string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.images.ACMMustGather == "" {
-		m.images.ACMMustGather = image
+	switch name {
+	case "acm":
+		if m.images.ACMMustGather == "" {
+			m.images.ACMMustGather = image
+		}
+	case "gitops":
+		if m.images.GitOpsMustGather == "" {
+			m.images.GitOpsMustGather = image
+		}
+	case "service-mesh":
+		if m.images.ServiceMeshMustGather == "" {
+			m.images.ServiceMeshMustGather = image
+		}
+	case "mtc":
+		if m.images.MTCMustGather == "" {
+			m.images.MTCMustGather = image
+		}
+	case "serverless":
+		if m.images.ServerlessMustGather == "" {
+			m.images.ServerlessMustGather = image
+		}
 	}
 }
 
