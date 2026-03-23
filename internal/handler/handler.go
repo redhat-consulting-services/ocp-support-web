@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/redhat-consulting-services/ocp-support-web/internal/monitoring"
@@ -122,6 +123,12 @@ func (h *Handler) handleStartGather(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Type         string `json:"type"`
 		Anonymize    bool   `json:"anonymize"`
+		AnonOpts     struct {
+			IPs      bool `json:"ips"`
+			MACs     bool `json:"macs"`
+			Domains  bool `json:"domains"`
+			Services bool `json:"services"`
+		} `json:"anonOpts"`
 		Since        string `json:"since"`
 		NodeName     string `json:"nodeName"`
 		NodeSelector string `json:"nodeSelector"`
@@ -165,7 +172,17 @@ func (h *Handler) handleStartGather(w http.ResponseWriter, r *http.Request) {
 		NodeSelector: req.NodeSelector,
 		HostNetwork:  req.HostNetwork,
 	}
-	id := h.mg.StartGather(gatherType, req.Anonymize, req.Since, opts)
+	anonOpts := mustgather.AnonOptions{
+		IPs:      req.AnonOpts.IPs,
+		MACs:     req.AnonOpts.MACs,
+		Domains:  req.AnonOpts.Domains,
+		Services: req.AnonOpts.Services,
+	}
+	// Backward compat: if old-style anonymize=true with no granular opts, enable all
+	if req.Anonymize && !anonOpts.Any() {
+		anonOpts = mustgather.AnonOptions{IPs: true, MACs: true, Domains: true, Services: true}
+	}
+	id := h.mg.StartGather(gatherType, anonOpts, req.Since, opts)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"id": id, "status": "running"})
 }
@@ -455,7 +472,11 @@ func (h *Handler) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	if caps.ACM {
 		h.mg.SetDetected(mustgather.GatherACM)
 		if caps.ACMVersion != "" {
-			h.mg.SetImage("acm", "registry.redhat.io/rhacm2/acm-must-gather-rhel9:v"+caps.ACMVersion)
+			acmRhel := "rhel9"
+			if versionLessThan(caps.ACMVersion, "2.10") {
+				acmRhel = "rhel8"
+			}
+			h.mg.SetImage("acm", "registry.redhat.io/rhacm2/acm-must-gather-"+acmRhel+":v"+caps.ACMVersion)
 		}
 	}
 	if caps.Logging {
@@ -494,7 +515,11 @@ func (h *Handler) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	if caps.MCE {
 		h.mg.SetDetected(mustgather.GatherMCE)
 		if caps.MCEVersion != "" {
-			h.mg.SetImage("mce", "registry.redhat.io/multicluster-engine/must-gather-rhel9:v"+caps.MCEVersion)
+			mceRhel := "rhel9"
+			if versionLessThan(caps.MCEVersion, "2.7") {
+				mceRhel = "rhel8"
+			}
+			h.mg.SetImage("mce", "registry.redhat.io/multicluster-engine/must-gather-"+mceRhel+":v"+caps.MCEVersion)
 		}
 	}
 	if caps.NetObserv {
@@ -589,6 +614,22 @@ func majorMinor(version string) string {
 		return parts[0] + "." + parts[1]
 	}
 	return version
+}
+
+// versionLessThan returns true if version "a.b[.c]" is less than "x.y".
+func versionLessThan(version, threshold string) bool {
+	parse := func(v string) (int, int) {
+		parts := strings.SplitN(v, ".", 3)
+		major, _ := strconv.Atoi(parts[0])
+		minor := 0
+		if len(parts) >= 2 {
+			minor, _ = strconv.Atoi(parts[1])
+		}
+		return major, minor
+	}
+	aMajor, aMinor := parse(version)
+	bMajor, bMinor := parse(threshold)
+	return aMajor < bMajor || (aMajor == bMajor && aMinor < bMinor)
 }
 
 func jsonError(w http.ResponseWriter, msg string, code int) {

@@ -7,8 +7,36 @@
 
     const jobsContainer = document.getElementById('jobs-container');
     const jobsEmpty = document.getElementById('jobs-empty');
+    const toastContainer = document.getElementById('toast-container');
     let pollInterval = null;
     let activeJobs = {};
+
+    function showToast(title, message, variant, jobId) {
+        variant = variant || 'info';
+        const iconMap = {
+            success: '<svg class="pf-v5-svg" viewBox="0 0 512 512" fill="currentColor" aria-hidden="true" width="1em" height="1em"><path d="M504 256c0 136.967-111.033 248-248 248S8 392.967 8 256 119.033 8 256 8s248 111.033 248 248zM227.314 387.314l184-184c6.248-6.248 6.248-16.379 0-22.627l-22.627-22.627c-6.248-6.249-16.379-6.249-22.628 0L216 308.118l-70.059-70.059c-6.248-6.248-16.379-6.248-22.628 0l-22.627 22.627c-6.248 6.248-6.248 16.379 0 22.627l104 104c6.249 6.249 16.379 6.249 22.628.001z"/></svg>',
+            info: '<svg class="pf-v5-svg" viewBox="0 0 512 512" fill="currentColor" aria-hidden="true" width="1em" height="1em"><path d="M256 8C119.043 8 8 119.083 8 256c0 136.997 111.043 248 248 248s248-111.003 248-248C504 119.083 392.957 8 256 8zm0 110c23.196 0 42 18.804 42 42s-18.804 42-42 42-42-18.804-42-42 18.804-42 42-42zm56 254c0 6.627-5.373 12-12 12h-88c-6.627 0-12-5.373-12-12v-24c0-6.627 5.373-12 12-12h12v-64h-12c-6.627 0-12-5.373-12-12v-24c0-6.627 5.373-12 12-12h64c6.627 0 12 5.373 12 12v100h12c6.627 0 12 5.373 12 12v24z"/></svg>',
+            danger: '<svg class="pf-v5-svg" viewBox="0 0 512 512" fill="currentColor" aria-hidden="true" width="1em" height="1em"><path d="M504 256c0 136.997-111.043 248-248 248S8 392.997 8 256C8 119.083 119.043 8 256 8s248 111.083 248 248zm-248 50c-25.405 0-46 20.595-46 46s20.595 46 46 46 46-20.595 46-46-20.595-46-46-46zm-43.673-165.346l7.418 136c.347 6.364 5.609 11.346 11.982 11.346h48.546c6.373 0 11.635-4.982 11.982-11.346l7.418-136c.375-6.874-5.098-12.654-11.982-12.654h-63.383c-6.884 0-12.356 5.78-11.981 12.654z"/></svg>'
+        };
+        let descHtml = '';
+        if (message) descHtml += '<p>' + escapeHtml(message) + '</p>';
+        if (jobId) descHtml += '<p style="margin-top:4px"><a href="#job-' + escapeHtml(jobId) + '" style="color:var(--pf-v5-global--link--Color);text-decoration:underline;cursor:pointer;" onclick="var el=document.getElementById(\'job-' + escapeHtml(jobId) + '\');if(el){el.scrollIntoView({behavior:\'smooth\',block:\'center\'});this.closest(\'.pf-v5-c-alert-group__item\').remove();}return false;">View progress ↓</a></p>';
+        const li = document.createElement('li');
+        li.className = 'pf-v5-c-alert-group__item';
+        li.innerHTML = `
+            <div class="pf-v5-c-alert pf-m-${variant}" aria-label="${escapeHtml(title)}">
+                <div class="pf-v5-c-alert__icon">${iconMap[variant] || iconMap.info}</div>
+                <p class="pf-v5-c-alert__title"><span class="pf-screen-reader">${escapeHtml(variant)}:</span>${escapeHtml(title)}</p>
+                ${descHtml ? '<div class="pf-v5-c-alert__description">' + descHtml + '</div>' : ''}
+                <div class="pf-v5-c-alert__action">
+                    <button class="pf-v5-c-button pf-m-plain" type="button" aria-label="Close" onclick="this.closest('.pf-v5-c-alert-group__item').remove()">
+                        <span class="pf-v5-c-button__icon"><svg viewBox="0 0 352 512" fill="currentColor" width="1em" height="1em"><path d="M242.72 256l100.07-100.07c12.28-12.28 12.28-32.19 0-44.48l-22.24-22.24c-12.28-12.28-32.19-12.28-44.48 0L176 189.28 75.93 89.21c-12.28-12.28-32.19-12.28-44.48 0L9.21 111.45c-12.28 12.28-12.28 32.19 0 44.48L109.28 256 9.21 356.07c-12.28 12.28-12.28 32.19 0 44.48l22.24 22.24c12.28 12.28 32.2 12.28 44.48 0L176 322.72l100.07 100.07c12.28 12.28 32.2 12.28 44.48 0l22.24-22.24c12.28-12.28 12.28-32.19 0-44.48L242.72 256z"/></svg></span>
+                    </button>
+                </div>
+            </div>`;
+        toastContainer.appendChild(li);
+        setTimeout(() => { if (li.parentNode) li.remove(); }, 8000);
+    }
 
     window.stopJob = async function(jobId, type) {
         if (!confirm('Are you sure you want to stop the ' + labelFor(type) + ' job?')) return;
@@ -24,18 +52,46 @@
         }
     };
 
-    // Anonymize toggle
-    let anonymizeEnabled = false;
+    // Anonymize Off/On toggle + granular checkboxes
     const anonHint = document.getElementById('anon-hint');
+    const anonOptions = document.getElementById('anon-options');
+    const anonIPs = document.getElementById('anon-ips');
+    const anonMACs = document.getElementById('anon-macs');
+    const anonDomains = document.getElementById('anon-domains');
+    const anonServices = document.getElementById('anon-services');
+    const anonCheckboxes = [anonIPs, anonMACs, anonDomains, anonServices];
+    let anonymizeEnabled = false;
+
+    function updateAnonHint() {
+        if (!anonymizeEnabled) {
+            anonHint.textContent = 'Data will be sent as-is';
+            return;
+        }
+        const selected = [];
+        if (anonIPs.checked) selected.push('IPs');
+        if (anonMACs.checked) selected.push('MACs');
+        if (anonDomains.checked) selected.push('domains');
+        if (anonServices.checked) selected.push('service DNS');
+        anonHint.textContent = selected.length > 0
+            ? selected.join(', ') + ' will be obfuscated'
+            : 'No options selected';
+    }
+
     document.querySelectorAll('#anonymize-toggle [data-anon]').forEach(btn => {
         btn.addEventListener('click', () => {
             anonymizeEnabled = btn.dataset.anon === 'true';
             document.querySelectorAll('#anonymize-toggle .pf-v5-c-toggle-group__button').forEach(b => b.classList.remove('pf-m-selected'));
             btn.classList.add('pf-m-selected');
-            anonHint.textContent = anonymizeEnabled ? 'IPs, MACs and domain names will be obfuscated' : 'Data will be sent as-is';
+            if (anonymizeEnabled) {
+                anonOptions.style.display = 'flex';
+                anonCheckboxes.forEach(cb => cb.checked = true);
+            } else {
+                anonOptions.style.display = 'none';
+            }
+            updateAnonHint();
         });
     });
-    document.querySelector('#anonymize-toggle [data-anon="false"]').classList.add('pf-m-selected');
+    anonCheckboxes.forEach(cb => cb.addEventListener('change', updateAnonHint));
 
     // Advanced options toggle
     const advancedToggle = document.getElementById('advanced-toggle');
@@ -161,7 +217,13 @@
         const type = selectedType;
         startBtn.disabled = true;
         startBtn.textContent = 'Starting...';
-        const anonymize = anonymizeEnabled;
+        const anonOpts = {
+            ips: anonIPs.checked,
+            macs: anonMACs.checked,
+            domains: anonDomains.checked,
+            services: anonServices.checked
+        };
+        const anonymize = anonOpts.ips || anonOpts.macs || anonOpts.domains || anonOpts.services;
         const since = sinceEnabled ? sinceSelect.value : '';
         const nodeName = nodeNameSelect ? nodeNameSelect.value : '';
         const nodeSelector = nodeSelectorSelect ? nodeSelectorSelect.value : '';
@@ -170,18 +232,19 @@
             const res = await fetch('/api/support/gather', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({type, anonymize, since, nodeName, nodeSelector, hostNetwork})
+                body: JSON.stringify({type, anonymize, anonOpts, since, nodeName, nodeSelector, hostNetwork})
             });
             const data = await res.json();
             if (data.error) {
-                alert('Error: ' + data.error);
+                showToast('Error starting gather', data.error, 'danger');
                 return;
             }
             activeJobs[data.id] = true;
             addJobCard(data.id, type, anonymize, since);
             startPolling();
+            showToast(labelFor(type) + ' started', 'Must-gather job is now running.', 'success', data.id);
         } catch (e) {
-            alert('Failed to start gather: ' + e.message);
+            showToast('Failed to start gather', e.message, 'danger');
         } finally {
             startBtn.disabled = false;
             startBtn.textContent = 'Start Gathering';
@@ -508,14 +571,15 @@
                 });
                 const data = await res.json();
                 if (data.error) {
-                    alert('Error: ' + data.error);
+                    showToast('Error starting etcd backup', data.error, 'danger');
                     return;
                 }
                 activeJobs[data.id] = true;
                 addJobCard(data.id, 'etcd-backup', false, '');
                 startPolling();
+                showToast('Etcd Backup started', 'Backup job is now running.', 'success', data.id);
             } catch (e) {
-                alert('Failed to start etcd backup: ' + e.message);
+                showToast('Failed to start etcd backup', e.message, 'danger');
             } finally {
                 etcdBtn.disabled = false;
                 etcdBtn.textContent = 'Start Etcd Backup';

@@ -55,21 +55,33 @@ type GatherOpts struct {
 	HostNetwork  bool   `json:"hostNetwork,omitempty"`
 }
 
+type AnonOptions struct {
+	IPs      bool `json:"ips"`
+	MACs     bool `json:"macs"`
+	Domains  bool `json:"domains"`
+	Services bool `json:"services"`
+}
+
+func (a AnonOptions) Any() bool {
+	return a.IPs || a.MACs || a.Domains || a.Services
+}
+
 type Job struct {
-	ID         string     `json:"id"`
-	Type       GatherType `json:"type"`
-	Status     string     `json:"status"` // running, complete, failed
-	StartedAt  time.Time  `json:"startedAt"`
-	Error      string     `json:"error,omitempty"`
-	Warning    string     `json:"warning,omitempty"`
-	FilePath   string     `json:"-"`
-	FileName   string     `json:"fileName,omitempty"`
-	Anonymize  bool       `json:"anonymize"`
-	Since      string     `json:"since,omitempty"`
-	LogOutput  string     `json:"logOutput,omitempty"`
-	Step       int        `json:"step"`
-	TotalSteps int        `json:"totalSteps"`
-	StepLabel  string     `json:"stepLabel,omitempty"`
+	ID          string      `json:"id"`
+	Type        GatherType  `json:"type"`
+	Status      string      `json:"status"` // running, complete, failed
+	StartedAt   time.Time   `json:"startedAt"`
+	Error       string      `json:"error,omitempty"`
+	Warning     string      `json:"warning,omitempty"`
+	FilePath    string      `json:"-"`
+	FileName    string      `json:"fileName,omitempty"`
+	Anonymize   bool        `json:"anonymize"`
+	AnonOpts    AnonOptions `json:"anonOpts,omitempty"`
+	Since       string      `json:"since,omitempty"`
+	LogOutput   string      `json:"logOutput,omitempty"`
+	Step        int         `json:"step"`
+	TotalSteps  int         `json:"totalSteps"`
+	StepLabel   string      `json:"stepLabel,omitempty"`
 }
 
 type DiagJob struct {
@@ -104,14 +116,15 @@ type ImageConfig struct {
 }
 
 type Manager struct {
-	workDir   string
-	images    ImageConfig
-	detected  map[GatherType]bool
-	mu        sync.Mutex
-	jobs      map[string]*Job
-	cancels   map[string]context.CancelFunc
-	diagMu    sync.Mutex
-	diagJobs  map[string]*DiagJob
+	workDir       string
+	images        ImageConfig
+	clusterDomain string
+	detected      map[GatherType]bool
+	mu            sync.Mutex
+	jobs          map[string]*Job
+	cancels       map[string]context.CancelFunc
+	diagMu        sync.Mutex
+	diagJobs      map[string]*DiagJob
 }
 
 func NewManager(workDir string, images ImageConfig) (*Manager, error) {
@@ -126,6 +139,10 @@ func NewManager(workDir string, images ImageConfig) (*Manager, error) {
 		cancels:  make(map[string]context.CancelFunc),
 		diagJobs: make(map[string]*DiagJob),
 	}, nil
+}
+
+func (m *Manager) SetClusterDomain(domain string) {
+	m.clusterDomain = domain
 }
 
 // SetDetected marks a gather type as available on this cluster.
@@ -296,7 +313,7 @@ func sanitizeID(id string) string {
 	return id
 }
 
-func (m *Manager) StartGather(gatherType GatherType, anonymize bool, since string, opts GatherOpts) string {
+func (m *Manager) StartGather(gatherType GatherType, anonOpts AnonOptions, since string, opts GatherOpts) string {
 	if since != "" && !validSince.MatchString(since) {
 		since = ""
 	}
@@ -356,7 +373,8 @@ func (m *Manager) StartGather(gatherType GatherType, anonymize bool, since strin
 		Type:      gatherType,
 		Status:    "running",
 		StartedAt: time.Now(),
-		Anonymize: anonymize,
+		Anonymize: anonOpts.Any(),
+		AnonOpts:  anonOpts,
 		Since:     since,
 	}
 
@@ -673,20 +691,13 @@ func (m *Manager) runGather(ctx context.Context, job *Job, opts GatherOpts) {
 		stepNum := len(steps) + 1
 		m.setStep(job, stepNum, totalSteps, "Anonymizing data")
 		m.appendLog(job, fmt.Sprintf("=== Step %d/%d: Anonymizing data ===", stepNum, totalSteps))
-
-		anonDir := destDir + "-anonymized"
-		err := m.runCommand(ctx, job, "must-gather-clean", "-i", destDir, "-o", anonDir)
-		if err != nil {
-			m.appendLog(job, fmt.Sprintf("must-gather-clean not available (%v). Falling back to IP obfuscation...", err))
-			if err := m.fallbackAnonymize(destDir); err != nil {
-				m.appendLog(job, fmt.Sprintf("Warning: fallback anonymization error: %v", err))
-			} else {
-				m.appendLog(job, "Fallback IP anonymization complete.")
-			}
+		m.appendLog(job, "Obfuscating IP addresses and MAC addresses...")
+		if err := m.fastAnonymize(destDir, job.AnonOpts); err != nil {
+			m.appendLog(job, fmt.Sprintf("Warning: anonymization error: %v", err))
 		} else {
-			m.appendLog(job, "=== Anonymization complete ===")
-			finalDir = anonDir
+			m.appendLog(job, "Obfuscation complete.")
 		}
+		m.appendLog(job, "=== Anonymizing data complete ===")
 	}
 
 	tarStepNum := totalSteps
@@ -837,15 +848,60 @@ func (m *Manager) runEtcdBackup(ctx context.Context, job *Job) {
 	m.mu.Unlock()
 }
 
-func (m *Manager) fallbackAnonymize(dir string) error {
+func (m *Manager) fastAnonymize(dir string, opts AnonOptions) error {
 	dir = filepath.Clean(dir)
 	if !strings.HasPrefix(dir, m.workDir) {
 		return fmt.Errorf("directory outside work dir")
 	}
 	findCmd := exec.Command("find", dir, "-type", "f",
 		"(", "-name", "*.log", "-o", "-name", "*.yaml", "-o", "-name", "*.json", "-o", "-name", "*.txt", ")",
-		"-exec", "sed", "-i", "-E", `s/\b([0-9]{1,3}\.){3}[0-9]{1,3}\b/x.x.x.x/g`, "{}", "+")
-	return findCmd.Run()
+		"-print0")
+
+	sedArgs := []string{"-0", "-P", "4", "-r", "sed", "-i", "-E"}
+	if opts.IPs {
+		sedArgs = append(sedArgs, "-e", `s/\b([0-9]{1,3}\.){3}[0-9]{1,3}\b/x.x.x.x/g`)
+	}
+	if opts.MACs {
+		sedArgs = append(sedArgs, "-e", `s/\b([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}\b/xx:xx:xx:xx:xx:xx/g`)
+	}
+	if opts.Domains && m.clusterDomain != "" {
+		domainMask := func(domain string) string {
+			parts := strings.Split(domain, ".")
+			masked := make([]string, len(parts))
+			for i := range parts {
+				masked[i] = "x"
+			}
+			return strings.Join(masked, ".")
+		}
+		escSed := func(s string) string {
+			return strings.ReplaceAll(regexp.QuoteMeta(s), `/`, `\/`)
+		}
+		// Full apps domain (e.g. apps.cluster-x.domain.example.com)
+		sedArgs = append(sedArgs, "-e", `s/`+escSed(m.clusterDomain)+`/`+domainMask(m.clusterDomain)+`/g`)
+		if strings.HasPrefix(m.clusterDomain, "apps.") {
+			// Cluster FQDN (e.g. cluster-x.domain.example.com)
+			clusterFQDN := m.clusterDomain[5:]
+			sedArgs = append(sedArgs, "-e", `s/`+escSed(clusterFQDN)+`/`+domainMask(clusterFQDN)+`/g`)
+			// Base domain (e.g. domain.example.com) — strip cluster name segment
+			if idx := strings.Index(clusterFQDN, "."); idx > 0 {
+				baseDomain := clusterFQDN[idx+1:]
+				sedArgs = append(sedArgs, "-e", `s/`+escSed(baseDomain)+`/`+domainMask(baseDomain)+`/g`)
+			}
+		}
+	}
+	if opts.Services {
+		sedArgs = append(sedArgs, "-e", `s/[a-zA-Z0-9._-]+\.svc\.cluster\.local/cleaned.svc.cluster.local/g`)
+	}
+
+	sedCmd := exec.Command("xargs", sedArgs...)
+	sedCmd.Stdin, _ = findCmd.StdoutPipe()
+	if err := findCmd.Start(); err != nil {
+		return err
+	}
+	if err := sedCmd.Run(); err != nil {
+		return err
+	}
+	return findCmd.Wait()
 }
 
 func (m *Manager) setError(job *Job, msg string) {
