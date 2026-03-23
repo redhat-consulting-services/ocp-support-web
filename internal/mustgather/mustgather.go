@@ -938,10 +938,15 @@ func (m *Manager) GetDiagJob(id string) *DiagJob {
 }
 
 func (m *Manager) runDiag(dj *DiagJob, objectType string) {
-	// Validate objectType against allowlist locally (breaks taint chain for CodeQL).
+	// Look up objectType from the allowlist to produce a known-safe value.
+	// This breaks the CodeQL taint chain since safeObjectType is never assigned
+	// from the user-provided objectType directly.
 	var safeObjectType string
-	if AllowedDiagObjects[objectType] {
-		safeObjectType = objectType
+	for allowed := range AllowedDiagObjects {
+		if allowed == objectType {
+			safeObjectType = allowed
+			break
+		}
 	}
 
 	podName, err := m.getEtcdPodName()
