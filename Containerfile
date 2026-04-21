@@ -14,9 +14,13 @@ FROM ${RUNTIME_IMAGE}
 
 COPY --from=builder /opt/app-root/src/ocp-support-web /usr/local/bin/ocp-support-web
 
-RUN mkdir -p /tmp/ocp-support-web/gather && \
-    chown -R 1001:0 /tmp/ocp-support-web && \
-    chmod -R g+rwX /tmp/ocp-support-web
+# /usr/bin/gather is the entrypoint called by `oc adm must-gather --image=...`
+# It runs our binary in must-gather mode, auto-detecting operators and gathering everything.
+RUN printf '#!/bin/bash\nexec /usr/local/bin/ocp-support-web gather\n' > /usr/bin/gather && \
+    chmod +x /usr/bin/gather && \
+    mkdir -p /must-gather /tmp/ocp-support-web/gather && \
+    chown -R 1001:0 /tmp/ocp-support-web /must-gather && \
+    chmod -R g+rwX /tmp/ocp-support-web /must-gather
 
 USER 1001
 

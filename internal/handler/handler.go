@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/redhat-consulting-services/ocp-support-web/internal/acm"
+	"github.com/redhat-consulting-services/ocp-support-web/internal/k8s"
 	"github.com/redhat-consulting-services/ocp-support-web/internal/monitoring"
 	"github.com/redhat-consulting-services/ocp-support-web/internal/mustgather"
 	"github.com/redhat-consulting-services/ocp-support-web/internal/status"
@@ -19,17 +21,20 @@ import (
 var validJobID = regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
 var validNodeName = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`)
 var validNodeSelector = regexp.MustCompile(`^[a-zA-Z0-9./_=-]+(?:,[a-zA-Z0-9./_=-]+)*$`)
+var validNamespace = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 
 type Handler struct {
 	mg      *mustgather.Manager
 	st      *status.Client
 	mon     *monitoring.Client
+	acm     *acm.Client
+	k8s     *k8s.Client
 	tmpl    *template.Template
 	static  fs.FS
 	version string
 }
 
-func New(mg *mustgather.Manager, st *status.Client, mon *monitoring.Client, webFS fs.FS, version string) (*Handler, error) {
+func New(mg *mustgather.Manager, st *status.Client, mon *monitoring.Client, acmClient *acm.Client, k8sClient *k8s.Client, webFS fs.FS, version string) (*Handler, error) {
 	tmplFS, err := fs.Sub(webFS, "templates")
 	if err != nil {
 		return nil, err
@@ -48,6 +53,8 @@ func New(mg *mustgather.Manager, st *status.Client, mon *monitoring.Client, webF
 		mg:      mg,
 		st:      st,
 		mon:     mon,
+		acm:     acmClient,
+		k8s:     k8sClient,
 		tmpl:    tmpl,
 		static:  staticFS,
 		version: version,
@@ -69,6 +76,8 @@ func (h *Handler) getPageVars(r *http.Request) pageVars {
 func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /", h.handleSupportPage)
 	mux.HandleFunc("GET /status", h.handleStatusPage)
+	mux.HandleFunc("GET /advanced", h.handleAdvancedPage)
+	mux.HandleFunc("GET /api/support/namespaces", h.handleNamespaces)
 	mux.HandleFunc("GET /api/support/jobs", h.handleListGatherJobs)
 	mux.HandleFunc("POST /api/support/gather", h.handleStartGather)
 	mux.HandleFunc("GET /api/support/gather/{jobId}", h.handleGatherStatus)
@@ -92,6 +101,27 @@ func (h *Handler) Register(mux *http.ServeMux) {
 		}
 	}
 
+	mux.HandleFunc("GET /resources", h.handleResourcesPage)
+	mux.HandleFunc("GET /api/resources/apiresources", h.handleAPIResources)
+	mux.HandleFunc("GET /api/resources/ns", h.handleNamespaceResources)
+	mux.HandleFunc("GET /api/resources/list", h.handleListNamespacedResources)
+	mux.HandleFunc("GET /api/resources/get", h.handleGetResource)
+
+	mux.HandleFunc("GET /acm", h.handleACMPage)
+	mux.HandleFunc("GET /api/acm/clusters", h.handleACMClusters)
+	mux.HandleFunc("GET /api/acm/clusters/{cluster}/namespaces", h.handleClusterNamespaces)
+	mux.HandleFunc("GET /api/acm/clusters/{cluster}/operators", h.handleClusterOperators)
+	mux.HandleFunc("GET /api/acm/clusters/{cluster}/version", h.handleClusterAgentVersion)
+	mux.HandleFunc("GET /api/acm/gather/images", h.handleACMGatherImages)
+	mux.HandleFunc("POST /api/acm/gather", h.handleStartRemoteGather)
+	mux.HandleFunc("GET /api/acm/gather/jobs", h.handleListRemoteGatherJobs)
+	mux.HandleFunc("GET /api/acm/gather/{jobId}", h.handleRemoteGatherStatus)
+	mux.HandleFunc("GET /api/acm/gather/{jobId}/download", h.handleRemoteGatherDownload)
+	mux.HandleFunc("DELETE /api/acm/gather/{jobId}", h.handleDeleteRemoteGather)
+	mux.HandleFunc("POST /api/acm/clusters/{cluster}/agent", h.handleDeployAgent)
+	mux.HandleFunc("DELETE /api/acm/clusters/{cluster}/agent", h.handleRemoveAgent)
+	mux.HandleFunc("POST /api/acm/clusters/{cluster}/agent/redeploy", h.handleRedeployAgent)
+
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(h.static)))
 }
 
@@ -113,46 +143,104 @@ func (h *Handler) handleStatusPage(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (h *Handler) handleAdvancedPage(w http.ResponseWriter, r *http.Request) {
+	if err := h.tmpl.ExecuteTemplate(w, "advanced.html", h.getPageVars(r)); err != nil {
+		log.Printf("template error: %v", err)
+		http.Error(w, "Internal Server Error", 500)
+	}
+}
+
+func (h *Handler) handleNamespaces(w http.ResponseWriter, r *http.Request) {
+	namespaces, err := h.st.GetNamespaces()
+	if err != nil {
+		log.Printf("namespaces error: %v", err)
+		jsonError(w, "failed to list namespaces", 500)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(namespaces)
+}
+
 func (h *Handler) handleListGatherJobs(w http.ResponseWriter, r *http.Request) {
 	jobs := h.mg.ListJobs()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(jobs)
 }
 
+// allowedResourceTypes is the whitelist of resource types for custom gather.
+var allowedResourceTypes = map[string]bool{
+	"pods": true, "services": true, "configmaps": true, "events": true,
+	"deployments": true, "statefulsets": true, "daemonsets": true,
+	"jobs": true, "cronjobs": true, "replicasets": true,
+	"persistentvolumeclaims": true, "serviceaccounts": true,
+	"roles": true, "rolebindings": true, "routes": true,
+	"ingresses": true, "endpointslices": true, "networkpolicies": true,
+	"horizontalpodautoscalers": true, "secrets": true,
+}
+
 func (h *Handler) handleStartGather(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Type         string `json:"type"`
-		Anonymize    bool   `json:"anonymize"`
+		Type         string   `json:"type"`
+		Types        []string `json:"types"`
+		Anonymize    bool     `json:"anonymize"`
 		AnonOpts     struct {
 			IPs      bool `json:"ips"`
 			MACs     bool `json:"macs"`
 			Domains  bool `json:"domains"`
 			Services bool `json:"services"`
 		} `json:"anonOpts"`
-		Since        string `json:"since"`
-		NodeName     string `json:"nodeName"`
-		NodeSelector string `json:"nodeSelector"`
-		HostNetwork  bool   `json:"hostNetwork"`
+		Since         string   `json:"since"`
+		NodeName      string   `json:"nodeName"`
+		NodeSelector  string   `json:"nodeSelector"`
+		HostNetwork   bool     `json:"hostNetwork"`
+		Namespaces    []string `json:"namespaces"`
+		ResourceTypes []string `json:"resourceTypes"`
+		IncludeLogs   bool     `json:"includeLogs"`
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, "invalid request body", 400)
 		return
 	}
 
-	gatherType := mustgather.GatherType(req.Type)
-	switch gatherType {
-	case mustgather.GatherDefault, mustgather.GatherVirtualization, mustgather.GatherODF,
-		mustgather.GatherACM, mustgather.GatherLogging, mustgather.GatherServiceMesh,
-		mustgather.GatherCompliance, mustgather.GatherMTC, mustgather.GatherGitOps,
-		mustgather.GatherServerless, mustgather.GatherMCE, mustgather.GatherNetObserv,
-		mustgather.GatherLocalStorage, mustgather.GatherSandboxed, mustgather.GatherNHC,
-		mustgather.GatherNUMA, mustgather.GatherPTP, mustgather.GatherSecretsStore,
-		mustgather.GatherLVMS, mustgather.GatherAudit, mustgather.GatherAll,
-		mustgather.GatherEtcdBackup:
-		// valid
-	default:
-		jsonError(w, "invalid gather type", 400)
-		return
+	validTypes := map[mustgather.GatherType]bool{
+		mustgather.GatherDefault: true, mustgather.GatherVirtualization: true,
+		mustgather.GatherODF: true, mustgather.GatherACM: true,
+		mustgather.GatherLogging: true, mustgather.GatherServiceMesh: true,
+		mustgather.GatherCompliance: true, mustgather.GatherMTC: true,
+		mustgather.GatherGitOps: true, mustgather.GatherServerless: true,
+		mustgather.GatherMCE: true, mustgather.GatherNetObserv: true,
+		mustgather.GatherLocalStorage: true, mustgather.GatherSandboxed: true,
+		mustgather.GatherNHC: true, mustgather.GatherNUMA: true,
+		mustgather.GatherPTP: true, mustgather.GatherSecretsStore: true,
+		mustgather.GatherLVMS: true, mustgather.GatherAudit: true,
+		mustgather.GatherAll: true, mustgather.GatherEtcdBackup: true,
+		mustgather.GatherCustom: true,
+	}
+
+	// Multi-select: if types array is provided with >1 entry, use GatherMulti
+	var gatherType mustgather.GatherType
+	var selectedTypes []mustgather.GatherType
+	if len(req.Types) > 1 {
+		gatherType = mustgather.GatherMulti
+		for _, t := range req.Types {
+			gt := mustgather.GatherType(t)
+			if !validTypes[gt] {
+				jsonError(w, fmt.Sprintf("invalid gather type: %s", t), 400)
+				return
+			}
+			selectedTypes = append(selectedTypes, gt)
+		}
+	} else {
+		typStr := req.Type
+		if len(req.Types) == 1 {
+			typStr = req.Types[0]
+		}
+		gatherType = mustgather.GatherType(typStr)
+		if !validTypes[gatherType] {
+			jsonError(w, "invalid gather type", 400)
+			return
+		}
 	}
 
 	if req.NodeName != "" && !validNodeName.MatchString(req.NodeName) {
@@ -167,18 +255,54 @@ func (h *Handler) handleStartGather(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "node name and node selector cannot be used together", 400)
 		return
 	}
+
 	opts := mustgather.GatherOpts{
-		NodeName:     req.NodeName,
-		NodeSelector: req.NodeSelector,
-		HostNetwork:  req.HostNetwork,
+		NodeName:      req.NodeName,
+		NodeSelector:  req.NodeSelector,
+		HostNetwork:   req.HostNetwork,
+		SelectedTypes: selectedTypes,
 	}
+
+	// Validate and attach custom gather options
+	if gatherType == mustgather.GatherCustom {
+		if len(req.Namespaces) == 0 {
+			jsonError(w, "at least one namespace is required", 400)
+			return
+		}
+		if len(req.Namespaces) > 50 {
+			jsonError(w, "maximum 50 namespaces allowed", 400)
+			return
+		}
+		for _, ns := range req.Namespaces {
+			if !validNamespace.MatchString(ns) {
+				jsonError(w, fmt.Sprintf("invalid namespace name: %s", ns), 400)
+				return
+			}
+		}
+		for _, rt := range req.ResourceTypes {
+			if !allowedResourceTypes[rt] {
+				jsonError(w, fmt.Sprintf("invalid resource type: %s", rt), 400)
+				return
+			}
+		}
+		opts.Custom = &mustgather.CustomGatherOpts{
+			Namespaces:    req.Namespaces,
+			ResourceTypes: req.ResourceTypes,
+			IncludeLogs:   req.IncludeLogs,
+		}
+	}
+
+	if h.mg.ActiveJobCount() >= 5 {
+		jsonError(w, "too many active jobs, please wait for existing jobs to complete", 429)
+		return
+	}
+
 	anonOpts := mustgather.AnonOptions{
 		IPs:      req.AnonOpts.IPs,
 		MACs:     req.AnonOpts.MACs,
 		Domains:  req.AnonOpts.Domains,
 		Services: req.AnonOpts.Services,
 	}
-	// Backward compat: if old-style anonymize=true with no granular opts, enable all
 	if req.Anonymize && !anonOpts.Any() {
 		anonOpts = mustgather.AnonOptions{IPs: true, MACs: true, Domains: true, Services: true}
 	}
@@ -244,6 +368,7 @@ func (h *Handler) handleStartDiag(w http.ResponseWriter, r *http.Request) {
 		Type       string `json:"type"`
 		ObjectType string `json:"objectType"`
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, "invalid request body", 400)
 		return
@@ -341,19 +466,19 @@ func (h *Handler) handleTopConsumers(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleEtcdHealth(w http.ResponseWriter, r *http.Request) {
 	result := status.EtcdHealth{Healthy: true}
 
-	leaderData, err := h.mon.Query("etcd_server_is_leader")
+	leaderData, err := h.mon.Query(`etcd_server_is_leader{namespace="openshift-etcd"}`)
 	if err != nil {
 		log.Printf("etcd leader query error: %v", err)
 		jsonError(w, "failed to query etcd leader", 500)
 		return
 	}
-	revisionData, err := h.mon.Query("etcd_debugging_mvcc_current_revision")
+	revisionData, err := h.mon.Query(`etcd_debugging_mvcc_current_revision{namespace="openshift-etcd"}`)
 	if err != nil {
 		log.Printf("etcd revision query error: %v", err)
 		jsonError(w, "failed to query etcd revision", 500)
 		return
 	}
-	sizeData, err := h.mon.Query("etcd_mvcc_db_total_size_in_bytes")
+	sizeData, err := h.mon.Query(`etcd_mvcc_db_total_size_in_bytes{namespace="openshift-etcd"}`)
 	if err != nil {
 		log.Printf("etcd db size query error: %v", err)
 		jsonError(w, "failed to query etcd db size", 500)
