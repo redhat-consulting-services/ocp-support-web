@@ -9,6 +9,8 @@ import (
 type AppConfig struct {
 	ListenAddr    string
 	MustGatherDir string
+	NativeGather  bool
+	AgentImage    string // container image for remote agents on managed clusters
 	OpenShift     OpenShiftConfig
 	Images        ImageConfig
 }
@@ -48,6 +50,8 @@ func Load() (*AppConfig, error) {
 	cfg := &AppConfig{
 		ListenAddr:    envOr("LISTEN_ADDR", ":8080"),
 		MustGatherDir: envOr("MUST_GATHER_DIR", "/tmp/ocp-support-web/gather"),
+		NativeGather:  os.Getenv("NATIVE_GATHER") != "false",
+		AgentImage:    os.Getenv("AGENT_IMAGE"), // auto-detected from pod spec if empty
 		OpenShift: OpenShiftConfig{
 			APIURL:          os.Getenv("OPENSHIFT_API_URL"),
 			Token:           os.Getenv("OPENSHIFT_TOKEN"),

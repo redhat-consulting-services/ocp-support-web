@@ -1,35 +1,25 @@
 package monitoring
 
 import (
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
-	"time"
+
+	"github.com/redhat-consulting-services/ocp-support-web/internal/k8s"
 )
 
 type Client struct {
-	thanosURL  string
-	token      string
-	httpClient *http.Client
+	thanosURL string
+	k8s       *k8s.Client
 }
 
-func NewClient(clusterDomain, token string, insecureSkipTLS bool) *Client {
-	tlsConfig := &tls.Config{}
-	if insecureSkipTLS {
-		tlsConfig.InsecureSkipVerify = true
-	}
-
+func NewClient(clusterDomain string, k8sClient *k8s.Client) *Client {
 	return &Client{
 		thanosURL: fmt.Sprintf("https://thanos-querier-openshift-monitoring.%s", clusterDomain),
-		token:     token,
-		httpClient: &http.Client{
-			Timeout:   30 * time.Second,
-			Transport: &http.Transport{TLSClientConfig: tlsConfig},
-		},
+		k8s:       k8sClient,
 	}
 }
 
@@ -40,10 +30,10 @@ func (c *Client) Query(query string) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Authorization", "Bearer "+c.k8s.Token)
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.k8s.HTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}

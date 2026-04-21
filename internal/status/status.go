@@ -1,7 +1,7 @@
 package status
 
 import (
-	"crypto/tls"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,30 +11,23 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/redhat-consulting-services/ocp-support-web/internal/k8s"
 )
 
 type Client struct {
-	apiURL     string
-	token      string
-	httpClient *http.Client
-	argoNS     string
+	k8s    *k8s.Client
+	argoNS string
 
 	mu             sync.Mutex
 	outOfSyncSince map[string]time.Time // app name -> first seen OutOfSync
 	lastArgoApps   []ArgoApp
 }
 
-func NewClient(apiURL, token string, insecureSkipTLS bool) *Client {
+func NewClient(k8sClient *k8s.Client) *Client {
 	c := &Client{
-		apiURL: apiURL,
-		token:  token,
-		argoNS: "openshift-gitops",
-		httpClient: &http.Client{
-			Timeout: 15 * time.Second,
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: insecureSkipTLS},
-			},
-		},
+		k8s:            k8sClient,
+		argoNS:         "openshift-gitops",
 		outOfSyncSince: make(map[string]time.Time),
 	}
 
@@ -78,16 +71,36 @@ type NodeInfo struct {
 	Labels map[string]string `json:"labels"`
 }
 
+// GetNamespaces returns all namespace names on the cluster.
+// Uses the service account token directly since all app users are
+// verified as cluster-admins by the OAuth proxy SAR check.
+func (c *Client) GetNamespaces() ([]string, error) {
+	data, err := c.k8s.Get("/api/v1/namespaces")
+	if err != nil {
+		return nil, fmt.Errorf("list namespaces: %w", err)
+	}
+	var names []string
+	for _, item := range k8s.JsonArray(data, "items") {
+		ns := item.(map[string]interface{})
+		name := k8s.JsonPath(ns, "metadata", "name")
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
 func (c *Client) GetNodes() ([]NodeInfo, error) {
-	data, err := c.get("/api/v1/nodes")
+	data, err := c.k8s.Get("/api/v1/nodes")
 	if err != nil {
 		return nil, err
 	}
 	var nodes []NodeInfo
-	for _, item := range jsonArray(data, "items") {
+	for _, item := range k8s.JsonArray(data, "items") {
 		node := item.(map[string]interface{})
-		name := jsonPath(node, "metadata", "name")
-		labels := jsonMap(node, "metadata", "labels")
+		name := k8s.JsonPath(node, "metadata", "name")
+		labels := k8s.JsonMap(node, "metadata", "labels")
 		labelMap := make(map[string]string)
 		for k, v := range labels {
 			if s, ok := v.(string); ok {
@@ -184,15 +197,15 @@ type ArgoResource struct {
 func (c *Client) GetClusterHealth() (*ClusterHealth, error) {
 	health := &ClusterHealth{}
 
-	cv, err := c.get("/apis/config.openshift.io/v1/clusterversions/version")
+	cv, err := c.k8s.Get("/apis/config.openshift.io/v1/clusterversions/version")
 	if err != nil {
 		return nil, fmt.Errorf("cluster version: %w", err)
 	}
 
-	health.Version = jsonPath(cv, "status", "desired", "version")
-	health.Platform = jsonPath(cv, "spec", "platform", "type")
+	health.Version = k8s.JsonPath(cv, "status", "desired", "version")
+	health.Platform = k8s.JsonPath(cv, "spec", "platform", "type")
 
-	conditions := jsonArray(cv, "status", "conditions")
+	conditions := k8s.JsonArray(cv, "status", "conditions")
 	health.Status = "Available"
 	for _, cond := range conditions {
 		cm := cond.(map[string]interface{})
@@ -207,7 +220,7 @@ func (c *Client) GetClusterHealth() (*ClusterHealth, error) {
 		}
 	}
 
-	cops, err := c.get("/apis/config.openshift.io/v1/clusteroperators")
+	cops, err := c.k8s.Get("/apis/config.openshift.io/v1/clusteroperators")
 	if err != nil {
 		return nil, fmt.Errorf("cluster operators: %w", err)
 	}
@@ -222,16 +235,16 @@ func (c *Client) GetClusterHealth() (*ClusterHealth, error) {
 		"image-registry": true, "operator-lifecycle-manager": true,
 	}
 
-	for _, item := range jsonArray(cops, "items") {
+	for _, item := range k8s.JsonArray(cops, "items") {
 		op := item.(map[string]interface{})
-		name := jsonPath(op, "metadata", "name")
+		name := k8s.JsonPath(op, "metadata", "name")
 		if !controlPlaneOps[name] && !importantOps[name] {
 			continue
 		}
 
 		conds := map[string]string{}
 		var msg string
-		for _, c := range jsonArray(op, "status", "conditions") {
+		for _, c := range k8s.JsonArray(op, "status", "conditions") {
 			cm := c.(map[string]interface{})
 			conds[cm["type"].(string)] = cm["status"].(string)
 			if cm["type"] == "Degraded" && cm["status"] == "True" {
@@ -256,17 +269,17 @@ func (c *Client) GetClusterHealth() (*ClusterHealth, error) {
 		}
 	}
 
-	nodes, err := c.get("/api/v1/nodes")
+	nodes, err := c.k8s.Get("/api/v1/nodes")
 	if err != nil {
 		return nil, fmt.Errorf("nodes: %w", err)
 	}
 
-	for _, item := range jsonArray(nodes, "items") {
+	for _, item := range k8s.JsonArray(nodes, "items") {
 		node := item.(map[string]interface{})
-		name := jsonPath(node, "metadata", "name")
+		name := k8s.JsonPath(node, "metadata", "name")
 
 		var roles []string
-		labels := jsonMap(node, "metadata", "labels")
+		labels := k8s.JsonMap(node, "metadata", "labels")
 		for k := range labels {
 			if len(k) > 24 && k[:24] == "node-role.kubernetes.io/" {
 				roles = append(roles, k[24:])
@@ -274,7 +287,7 @@ func (c *Client) GetClusterHealth() (*ClusterHealth, error) {
 		}
 
 		status := "NotReady"
-		for _, c := range jsonArray(node, "status", "conditions") {
+		for _, c := range k8s.JsonArray(node, "status", "conditions") {
 			cm := c.(map[string]interface{})
 			if cm["type"] == "Ready" && cm["status"] == "True" {
 				status = "Ready"
@@ -288,28 +301,28 @@ func (c *Client) GetClusterHealth() (*ClusterHealth, error) {
 		})
 	}
 
-	odf, err := c.get("/apis/ocs.openshift.io/v1/storageclusters")
+	odf, err := c.k8s.Get("/apis/ocs.openshift.io/v1/storageclusters")
 	if err != nil {
 		health.ODF = &ODFStatus{Installed: false}
 	} else {
-		items := jsonArray(odf, "items")
+		items := k8s.JsonArray(odf, "items")
 		if len(items) == 0 {
 			health.ODF = &ODFStatus{Installed: false}
 		} else {
 			sc := items[0].(map[string]interface{})
 			health.ODF = &ODFStatus{
 				Installed: true,
-				Name:      jsonPath(sc, "metadata", "name"),
-				Phase:     jsonPath(sc, "status", "phase"),
+				Name:      k8s.JsonPath(sc, "metadata", "name"),
+				Phase:     k8s.JsonPath(sc, "status", "phase"),
 			}
 		}
 	}
 
-	apiServer, err := c.get("/apis/config.openshift.io/v1/apiservers/cluster")
+	apiServer, err := c.k8s.Get("/apis/config.openshift.io/v1/apiservers/cluster")
 	if err != nil {
 		health.EtcdEncryption = "Unknown"
 	} else {
-		encType := jsonPath(apiServer, "spec", "encryption", "type")
+		encType := k8s.JsonPath(apiServer, "spec", "encryption", "type")
 		switch encType {
 		case "aescbc", "aesgcm":
 			health.EtcdEncryption = "Encrypted (" + encType + ")"
@@ -358,28 +371,29 @@ type ClusterCapabilities struct {
 	SecretsStoreVersion  string `json:"secretsStoreVersion,omitempty"`
 	LVMS                 bool   `json:"lvms"`
 	LVMSVersion          string `json:"lvmsVersion,omitempty"`
+	ManagedClusterCount  int    `json:"managedClusterCount,omitempty"`
 }
 
 func (c *Client) GetCapabilities() *ClusterCapabilities {
 	caps := &ClusterCapabilities{}
 
 	// Check for CNV (HyperConverged)
-	if _, err := c.get("/apis/hco.kubevirt.io/v1beta1/hyperconvergeds"); err == nil {
+	if _, err := c.k8s.Get("/apis/hco.kubevirt.io/v1beta1/hyperconvergeds"); err == nil {
 		caps.CNV = true
 		caps.CNVVersion = c.csvVersion("openshift-cnv", "kubevirt-hyperconverged-operator.v")
 	}
 
 	// Check for ODF (StorageCluster)
-	if data, err := c.get("/apis/ocs.openshift.io/v1/storageclusters"); err == nil {
-		if items := jsonArray(data, "items"); len(items) > 0 {
+	if data, err := c.k8s.Get("/apis/ocs.openshift.io/v1/storageclusters"); err == nil {
+		if items := k8s.JsonArray(data, "items"); len(items) > 0 {
 			caps.ODF = true
 			caps.ODFVersion = c.csvVersion("openshift-storage", "ocs-operator.v")
 		}
 	}
 
 	// Check for ACM (MultiClusterHub) and extract version
-	if data, err := c.get("/apis/operator.open-cluster-management.io/v1/multiclusterhubs"); err == nil {
-		if items := jsonArray(data, "items"); len(items) > 0 {
+	if data, err := c.k8s.Get("/apis/operator.open-cluster-management.io/v1/multiclusterhubs"); err == nil {
+		if items := k8s.JsonArray(data, "items"); len(items) > 0 {
 			caps.ACM = true
 			if item, ok := items[0].(map[string]interface{}); ok {
 				if st, ok := item["status"].(map[string]interface{}); ok {
@@ -388,93 +402,104 @@ func (c *Client) GetCapabilities() *ClusterCapabilities {
 					}
 				}
 			}
+			// Count managed clusters (excluding local-cluster)
+			if mcData, err := c.k8s.Get("/apis/cluster.open-cluster-management.io/v1/managedclusters"); err == nil {
+				for _, mc := range k8s.JsonArray(mcData, "items") {
+					if m, ok := mc.(map[string]interface{}); ok {
+						name := k8s.JsonPath(m, "metadata", "name")
+						if name != "" && name != "local-cluster" {
+							caps.ManagedClusterCount++
+						}
+					}
+				}
+			}
 		}
 	}
 
 	// Check for OpenShift Logging
-	if _, err := c.get("/apis/logging.openshift.io/v1/clusterloggings"); err == nil {
+	if _, err := c.k8s.Get("/apis/logging.openshift.io/v1/clusterloggings"); err == nil {
 		caps.Logging = true
 		caps.LoggingVersion = c.csvVersion("openshift-logging", "cluster-logging.v")
 	}
 
 	// Check for Service Mesh
-	if _, err := c.get("/apis/maistra.io/v2/servicemeshcontrolplanes"); err == nil {
+	if _, err := c.k8s.Get("/apis/maistra.io/v2/servicemeshcontrolplanes"); err == nil {
 		caps.ServiceMesh = true
 		caps.ServiceMeshVersion = c.csvVersion("openshift-operators", "servicemeshoperator.v")
 	}
 
 	// Check for Compliance Operator
-	if _, err := c.get("/apis/compliance.openshift.io/v1alpha1/compliancescans"); err == nil {
+	if _, err := c.k8s.Get("/apis/compliance.openshift.io/v1alpha1/compliancescans"); err == nil {
 		caps.Compliance = true
 	}
 
 	// Check for Migration Toolkit for Containers
-	if _, err := c.get("/apis/migration.openshift.io/v1alpha1/migrationcontrollers"); err == nil {
+	if _, err := c.k8s.Get("/apis/migration.openshift.io/v1alpha1/migrationcontrollers"); err == nil {
 		caps.MTC = true
 		caps.MTCVersion = c.csvVersion("openshift-migration", "mtc-operator.v")
 	}
 
 	// Check for OpenShift GitOps
-	if _, err := c.get("/apis/argoproj.io/v1beta1/argocds"); err == nil {
+	if _, err := c.k8s.Get("/apis/argoproj.io/v1beta1/argocds"); err == nil {
 		caps.GitOps = true
 		caps.GitOpsVersion = c.csvVersion("openshift-gitops-operator", "openshift-gitops-operator.v")
 	}
 
 	// Check for OpenShift Serverless
-	if _, err := c.get("/apis/operator.knative.dev/v1beta1/knativeservings"); err == nil {
+	if _, err := c.k8s.Get("/apis/operator.knative.dev/v1beta1/knativeservings"); err == nil {
 		caps.Serverless = true
 		caps.ServerlessVersion = c.csvVersion("openshift-serverless", "serverless-operator.v")
 	}
 
 	// Check for Multicluster Engine (hosted control planes)
-	if _, err := c.get("/apis/multicluster.openshift.io/v1/multiclusterengines"); err == nil {
+	if _, err := c.k8s.Get("/apis/multicluster.openshift.io/v1/multiclusterengines"); err == nil {
 		caps.MCE = true
 		caps.MCEVersion = c.csvVersion("multicluster-engine", "multicluster-engine.v")
 	}
 
 	// Check for Network Observability
-	if _, err := c.get("/apis/flows.netobserv.io/v1beta2/flowcollectors"); err == nil {
+	if _, err := c.k8s.Get("/apis/flows.netobserv.io/v1beta2/flowcollectors"); err == nil {
 		caps.NetObserv = true
 	}
 
 	// Check for Local Storage Operator
-	if _, err := c.get("/apis/local.storage.openshift.io/v1/localvolumes"); err == nil {
+	if _, err := c.k8s.Get("/apis/local.storage.openshift.io/v1/localvolumes"); err == nil {
 		caps.LocalStorage = true
 		caps.LocalStorageVersion = c.csvVersion("openshift-local-storage", "local-storage-operator.v")
 	}
 
 	// Check for OpenShift Sandboxed Containers
-	if _, err := c.get("/apis/kataconfiguration.openshift.io/v1/kataconfigs"); err == nil {
+	if _, err := c.k8s.Get("/apis/kataconfiguration.openshift.io/v1/kataconfigs"); err == nil {
 		caps.Sandboxed = true
 		caps.SandboxedVersion = c.csvVersion("openshift-sandboxed-containers-operator", "sandboxed-containers-operator.v")
 	}
 
 	// Check for Node Health Check
-	if _, err := c.get("/apis/remediation.medik8s.io/v1alpha1/nodehealthchecks"); err == nil {
+	if _, err := c.k8s.Get("/apis/remediation.medik8s.io/v1alpha1/nodehealthchecks"); err == nil {
 		caps.NHC = true
 		caps.NHCVersion = c.csvVersion("openshift-workload-availability", "node-healthcheck-operator.v")
 	}
 
 	// Check for NUMA Resources Operator
-	if _, err := c.get("/apis/nodetopology.openshift.io/v2/numaresourcesschedulers"); err == nil {
+	if _, err := c.k8s.Get("/apis/nodetopology.openshift.io/v2/numaresourcesschedulers"); err == nil {
 		caps.NUMA = true
 		caps.NUMAVersion = c.csvVersion("openshift-numaresources", "numaresources-operator.v")
 	}
 
 	// Check for PTP Operator
-	if _, err := c.get("/apis/ptp.openshift.io/v1/ptpconfigs"); err == nil {
+	if _, err := c.k8s.Get("/apis/ptp.openshift.io/v1/ptpconfigs"); err == nil {
 		caps.PTP = true
 		caps.PTPVersion = c.csvVersion("openshift-ptp", "ptp-operator.v")
 	}
 
 	// Check for Secrets Store CSI Driver
-	if _, err := c.get("/apis/secrets-store.csi.x-k8s.io/v1/secretproviderclasses"); err == nil {
+	if _, err := c.k8s.Get("/apis/secrets-store.csi.x-k8s.io/v1/secretproviderclasses"); err == nil {
 		caps.SecretsStore = true
 		caps.SecretsStoreVersion = c.csvVersion("openshift-cluster-csi-drivers", "secrets-store-csi-driver-operator.v")
 	}
 
 	// Check for LVM Storage (LVMS)
-	if _, err := c.get("/apis/lvm.topolvm.io/v1alpha1/lvmclusters"); err == nil {
+	if _, err := c.k8s.Get("/apis/lvm.topolvm.io/v1alpha1/lvmclusters"); err == nil {
 		caps.LVMS = true
 		caps.LVMSVersion = c.csvVersion("openshift-lvm-storage", "lvms-operator.v")
 	}
@@ -485,11 +510,11 @@ func (c *Client) GetCapabilities() *ClusterCapabilities {
 // csvVersion queries the CSVs in a namespace and returns the full version
 // string of the first CSV whose name starts with the given prefix.
 func (c *Client) csvVersion(ns, prefix string) string {
-	data, err := c.get("/apis/operators.coreos.com/v1alpha1/namespaces/" + ns + "/clusterserviceversions")
+	data, err := c.k8s.Get("/apis/operators.coreos.com/v1alpha1/namespaces/" + ns + "/clusterserviceversions")
 	if err != nil {
 		return ""
 	}
-	for _, item := range jsonArray(data, "items") {
+	for _, item := range k8s.JsonArray(data, "items") {
 		m, _ := item.(map[string]interface{})
 		if m == nil {
 			continue
@@ -518,12 +543,12 @@ type NMStateNetwork struct {
 
 // IsNMStateInstalled checks if NMState operator is present on the cluster.
 func (c *Client) IsNMStateInstalled() bool {
-	_, err := c.get("/apis/nmstate.io/v1beta1/nodenetworkstates")
+	_, err := c.k8s.Get("/apis/nmstate.io/v1beta1/nodenetworkstates")
 	return err == nil
 }
 
 func (c *Client) GetNMStateNetworks() ([]NMStateNetwork, error) {
-	data, err := c.get("/apis/nmstate.io/v1beta1/nodenetworkstates")
+	data, err := c.k8s.Get("/apis/nmstate.io/v1beta1/nodenetworkstates")
 	if err != nil {
 		return nil, fmt.Errorf("nmstate: %w", err)
 	}
@@ -539,7 +564,7 @@ func (c *Client) GetNMStateNetworks() ([]NMStateNetwork, error) {
 	}
 
 	var allNodes []string
-	items := jsonArray(data, "items")
+	items := k8s.JsonArray(data, "items")
 
 	type netInfo struct {
 		netType string
@@ -549,10 +574,10 @@ func (c *Client) GetNMStateNetworks() ([]NMStateNetwork, error) {
 
 	for _, item := range items {
 		nns := item.(map[string]interface{})
-		nodeName := jsonPath(nns, "metadata", "name")
+		nodeName := k8s.JsonPath(nns, "metadata", "name")
 		allNodes = append(allNodes, nodeName)
 
-		ifaces := jsonArray(nns, "status", "currentState", "interfaces")
+		ifaces := k8s.JsonArray(nns, "status", "currentState", "interfaces")
 		for _, iface := range ifaces {
 			ifMap := iface.(map[string]interface{})
 			name, _ := ifMap["name"].(string)
@@ -632,16 +657,16 @@ type StorageClass struct {
 }
 
 func (c *Client) GetStorageClasses() ([]StorageClass, error) {
-	data, err := c.get("/apis/storage.k8s.io/v1/storageclasses")
+	data, err := c.k8s.Get("/apis/storage.k8s.io/v1/storageclasses")
 	if err != nil {
 		return nil, fmt.Errorf("storage classes: %w", err)
 	}
 
 	var result []StorageClass
-	for _, item := range jsonArray(data, "items") {
+	for _, item := range k8s.JsonArray(data, "items") {
 		sc := item.(map[string]interface{})
-		name := jsonPath(sc, "metadata", "name")
-		annotations := jsonMap(sc, "metadata", "annotations")
+		name := k8s.JsonPath(sc, "metadata", "name")
+		annotations := k8s.JsonMap(sc, "metadata", "annotations")
 		isDefault := false
 		if annotations != nil {
 			if v, ok := annotations["storageclass.kubernetes.io/is-default-class"].(string); ok && v == "true" {
@@ -651,10 +676,10 @@ func (c *Client) GetStorageClasses() ([]StorageClass, error) {
 
 		result = append(result, StorageClass{
 			Name:              name,
-			Provisioner:       jsonPath(sc, "provisioner"),
+			Provisioner:       k8s.JsonPath(sc, "provisioner"),
 			IsDefault:         isDefault,
-			ReclaimPolicy:     jsonPath(sc, "reclaimPolicy"),
-			VolumeBindingMode: jsonPath(sc, "volumeBindingMode"),
+			ReclaimPolicy:     k8s.JsonPath(sc, "reclaimPolicy"),
+			VolumeBindingMode: k8s.JsonPath(sc, "volumeBindingMode"),
 		})
 	}
 
@@ -669,11 +694,11 @@ func (c *Client) GetStorageClasses() ([]StorageClass, error) {
 }
 
 func (c *Client) GetClusterID() (string, error) {
-	cv, err := c.get("/apis/config.openshift.io/v1/clusterversions/version")
+	cv, err := c.k8s.Get("/apis/config.openshift.io/v1/clusterversions/version")
 	if err != nil {
 		return "", fmt.Errorf("cluster version: %w", err)
 	}
-	return jsonPath(cv, "spec", "clusterID"), nil
+	return k8s.JsonPath(cv, "spec", "clusterID"), nil
 }
 
 // GPU resource keys for each vendor's device plugin
@@ -722,12 +747,12 @@ func gpuCount(resources map[string]interface{}) (int, string) {
 }
 
 func (c *Client) GetGPUNodes() ([]GPUNode, error) {
-	nodesData, err := c.get("/api/v1/nodes")
+	nodesData, err := c.k8s.Get("/api/v1/nodes")
 	if err != nil {
 		return nil, fmt.Errorf("nodes: %w", err)
 	}
 
-	podsData, err := c.get("/api/v1/pods?fieldSelector=status.phase%3DRunning")
+	podsData, err := c.k8s.Get("/api/v1/pods?fieldSelector=status.phase%3DRunning")
 	if err != nil {
 		return nil, fmt.Errorf("pods: %w", err)
 	}
@@ -737,21 +762,21 @@ func (c *Client) GetGPUNodes() ([]GPUNode, error) {
 		consumers []GPUConsumer
 	}
 	gpuByNode := map[string]*gpuPodInfo{}
-	for _, item := range jsonArray(podsData, "items") {
+	for _, item := range k8s.JsonArray(podsData, "items") {
 		pod := item.(map[string]interface{})
-		nodeName := jsonPath(pod, "spec", "nodeName")
+		nodeName := k8s.JsonPath(pod, "spec", "nodeName")
 		if nodeName == "" {
 			continue
 		}
-		podName := jsonPath(pod, "metadata", "name")
-		ns := jsonPath(pod, "metadata", "namespace")
+		podName := k8s.JsonPath(pod, "metadata", "name")
+		ns := k8s.JsonPath(pod, "metadata", "namespace")
 
 		var podGPU int
-		for _, c := range jsonArray(pod, "spec", "containers") {
+		for _, c := range k8s.JsonArray(pod, "spec", "containers") {
 			container := c.(map[string]interface{})
-			if n, _ := gpuCount(jsonMap(container, "resources", "requests")); n > 0 {
+			if n, _ := gpuCount(k8s.JsonMap(container, "resources", "requests")); n > 0 {
 				podGPU += n
-			} else if n, _ := gpuCount(jsonMap(container, "resources", "limits")); n > 0 {
+			} else if n, _ := gpuCount(k8s.JsonMap(container, "resources", "limits")); n > 0 {
 				podGPU += n
 			}
 		}
@@ -777,18 +802,18 @@ func (c *Client) GetGPUNodes() ([]GPUNode, error) {
 	}
 
 	var result []GPUNode
-	for _, item := range jsonArray(nodesData, "items") {
+	for _, item := range k8s.JsonArray(nodesData, "items") {
 		node := item.(map[string]interface{})
-		capacity := jsonMap(node, "status", "capacity")
+		capacity := k8s.JsonMap(node, "status", "capacity")
 		gpuCap, gpuType := gpuCount(capacity)
 		if gpuCap == 0 {
 			continue
 		}
 
-		name := jsonPath(node, "metadata", "name")
+		name := k8s.JsonPath(node, "metadata", "name")
 
 		var roles []string
-		labels := jsonMap(node, "metadata", "labels")
+		labels := k8s.JsonMap(node, "metadata", "labels")
 		for k := range labels {
 			if len(k) > 24 && k[:24] == "node-role.kubernetes.io/" {
 				roles = append(roles, k[24:])
@@ -796,7 +821,7 @@ func (c *Client) GetGPUNodes() ([]GPUNode, error) {
 		}
 
 		status := "NotReady"
-		for _, cond := range jsonArray(node, "status", "conditions") {
+		for _, cond := range k8s.JsonArray(node, "status", "conditions") {
 			cm := cond.(map[string]interface{})
 			if cm["type"] == "Ready" && cm["status"] == "True" {
 				status = "Ready"
@@ -833,25 +858,25 @@ func (c *Client) GetGPUNodes() ([]GPUNode, error) {
 }
 
 func (c *Client) GetNodeUtilization() ([]NodeUtilization, error) {
-	nodesData, err := c.get("/api/v1/nodes")
+	nodesData, err := c.k8s.Get("/api/v1/nodes")
 	if err != nil {
 		return nil, fmt.Errorf("nodes: %w", err)
 	}
 
-	metricsData, err := c.get("/apis/metrics.k8s.io/v1beta1/nodes")
+	metricsData, err := c.k8s.Get("/apis/metrics.k8s.io/v1beta1/nodes")
 	if err != nil {
 		return nil, fmt.Errorf("node metrics: %w", err)
 	}
 
-	podsData, err := c.get("/api/v1/pods?fieldSelector=status.phase%3DRunning")
+	podsData, err := c.k8s.Get("/api/v1/pods?fieldSelector=status.phase%3DRunning")
 	if err != nil {
 		return nil, fmt.Errorf("pods: %w", err)
 	}
 
 	metricsMap := map[string]map[string]interface{}{}
-	for _, item := range jsonArray(metricsData, "items") {
+	for _, item := range k8s.JsonArray(metricsData, "items") {
 		m := item.(map[string]interface{})
-		name := jsonPath(m, "metadata", "name")
+		name := k8s.JsonPath(m, "metadata", "name")
 		metricsMap[name] = m
 	}
 
@@ -861,9 +886,9 @@ func (c *Client) GetNodeUtilization() ([]NodeUtilization, error) {
 		count  int
 	}
 	podsByNode := map[string]*podResources{}
-	for _, item := range jsonArray(podsData, "items") {
+	for _, item := range k8s.JsonArray(podsData, "items") {
 		pod := item.(map[string]interface{})
-		nodeName := jsonPath(pod, "spec", "nodeName")
+		nodeName := k8s.JsonPath(pod, "spec", "nodeName")
 		if nodeName == "" {
 			continue
 		}
@@ -872,9 +897,9 @@ func (c *Client) GetNodeUtilization() ([]NodeUtilization, error) {
 		}
 		podsByNode[nodeName].count++
 
-		for _, c := range jsonArray(pod, "spec", "containers") {
+		for _, c := range k8s.JsonArray(pod, "spec", "containers") {
 			container := c.(map[string]interface{})
-			requests := jsonMap(container, "resources", "requests")
+			requests := k8s.JsonMap(container, "resources", "requests")
 			if requests != nil {
 				if cpu, ok := requests["cpu"].(string); ok {
 					podsByNode[nodeName].cpuReq += parseCPU(cpu)
@@ -887,12 +912,12 @@ func (c *Client) GetNodeUtilization() ([]NodeUtilization, error) {
 	}
 
 	var result []NodeUtilization
-	for _, item := range jsonArray(nodesData, "items") {
+	for _, item := range k8s.JsonArray(nodesData, "items") {
 		node := item.(map[string]interface{})
-		name := jsonPath(node, "metadata", "name")
+		name := k8s.JsonPath(node, "metadata", "name")
 
 		var roles []string
-		labels := jsonMap(node, "metadata", "labels")
+		labels := k8s.JsonMap(node, "metadata", "labels")
 		for k := range labels {
 			if len(k) > 24 && k[:24] == "node-role.kubernetes.io/" {
 				roles = append(roles, k[24:])
@@ -900,32 +925,32 @@ func (c *Client) GetNodeUtilization() ([]NodeUtilization, error) {
 		}
 
 		status := "NotReady"
-		for _, cond := range jsonArray(node, "status", "conditions") {
+		for _, cond := range k8s.JsonArray(node, "status", "conditions") {
 			cm := cond.(map[string]interface{})
 			if cm["type"] == "Ready" && cm["status"] == "True" {
 				status = "Ready"
 			}
 		}
 
-		capacity := jsonMap(node, "status", "capacity")
-		allocatable := jsonMap(node, "status", "allocatable")
+		capacity := k8s.JsonMap(node, "status", "capacity")
+		allocatable := k8s.JsonMap(node, "status", "allocatable")
 
 		nu := NodeUtilization{
 			Name:           name,
 			Roles:          roles,
 			Status:         status,
-			CPUCapacity:    parseCPU(stringOrEmpty(capacity, "cpu")),
-			CPUAllocatable: parseCPU(stringOrEmpty(allocatable, "cpu")),
-			MemCapacity:    parseMemory(stringOrEmpty(capacity, "memory")),
-			MemAllocatable: parseMemory(stringOrEmpty(allocatable, "memory")),
-			PodCapacity:    parseInt(stringOrEmpty(capacity, "pods")),
+			CPUCapacity:    parseCPU(k8s.StringOrEmpty(capacity, "cpu")),
+			CPUAllocatable: parseCPU(k8s.StringOrEmpty(allocatable, "cpu")),
+			MemCapacity:    parseMemory(k8s.StringOrEmpty(capacity, "memory")),
+			MemAllocatable: parseMemory(k8s.StringOrEmpty(allocatable, "memory")),
+			PodCapacity:    parseInt(k8s.StringOrEmpty(capacity, "pods")),
 		}
 
 		if m, ok := metricsMap[name]; ok {
-			usage := jsonMap(m, "usage")
+			usage := k8s.JsonMap(m, "usage")
 			if usage != nil {
-				nu.CPUUsage = parseCPU(stringOrEmpty(usage, "cpu"))
-				nu.MemUsage = parseMemory(stringOrEmpty(usage, "memory"))
+				nu.CPUUsage = parseCPU(k8s.StringOrEmpty(usage, "cpu"))
+				nu.MemUsage = parseMemory(k8s.StringOrEmpty(usage, "memory"))
 			}
 		}
 
@@ -1002,12 +1027,12 @@ func parseInt64(s string) int64 {
 }
 
 func (c *Client) GetTopConsumers(limit int) (*TopConsumers, error) {
-	metricsData, err := c.get("/apis/metrics.k8s.io/v1beta1/pods")
+	metricsData, err := c.k8s.Get("/apis/metrics.k8s.io/v1beta1/pods")
 	if err != nil {
 		return nil, fmt.Errorf("pod metrics: %w", err)
 	}
 
-	podsData, err := c.get("/api/v1/pods?fieldSelector=status.phase%3DRunning")
+	podsData, err := c.k8s.Get("/api/v1/pods?fieldSelector=status.phase%3DRunning")
 	if err != nil {
 		return nil, fmt.Errorf("pods: %w", err)
 	}
@@ -1017,13 +1042,13 @@ func (c *Client) GetTopConsumers(limit int) (*TopConsumers, error) {
 		mem int64
 	}
 	reqMap := map[string]*reqInfo{}
-	for _, item := range jsonArray(podsData, "items") {
+	for _, item := range k8s.JsonArray(podsData, "items") {
 		pod := item.(map[string]interface{})
-		key := jsonPath(pod, "metadata", "namespace") + "/" + jsonPath(pod, "metadata", "name")
+		key := k8s.JsonPath(pod, "metadata", "namespace") + "/" + k8s.JsonPath(pod, "metadata", "name")
 		ri := &reqInfo{}
-		for _, c := range jsonArray(pod, "spec", "containers") {
+		for _, c := range k8s.JsonArray(pod, "spec", "containers") {
 			container := c.(map[string]interface{})
-			requests := jsonMap(container, "resources", "requests")
+			requests := k8s.JsonMap(container, "resources", "requests")
 			if requests != nil {
 				if cpu, ok := requests["cpu"].(string); ok {
 					ri.cpu += parseCPU(cpu)
@@ -1039,18 +1064,18 @@ func (c *Client) GetTopConsumers(limit int) (*TopConsumers, error) {
 	var pods []TopConsumer
 	var vms []TopConsumer
 
-	for _, item := range jsonArray(metricsData, "items") {
+	for _, item := range k8s.JsonArray(metricsData, "items") {
 		pm := item.(map[string]interface{})
-		podName := jsonPath(pm, "metadata", "name")
-		ns := jsonPath(pm, "metadata", "namespace")
+		podName := k8s.JsonPath(pm, "metadata", "name")
+		ns := k8s.JsonPath(pm, "metadata", "namespace")
 
 		var totalCPU, totalMem int64
-		for _, c := range jsonArray(pm, "containers") {
+		for _, c := range k8s.JsonArray(pm, "containers") {
 			container := c.(map[string]interface{})
-			usage := jsonMap(container, "usage")
+			usage := k8s.JsonMap(container, "usage")
 			if usage != nil {
-				totalCPU += parseCPU(stringOrEmpty(usage, "cpu"))
-				totalMem += parseMemory(stringOrEmpty(usage, "memory"))
+				totalCPU += parseCPU(k8s.StringOrEmpty(usage, "cpu"))
+				totalMem += parseMemory(k8s.StringOrEmpty(usage, "memory"))
 			}
 		}
 
@@ -1165,25 +1190,25 @@ func (c *Client) GetArgoApps() []ArgoApp {
 }
 
 func (c *Client) fetchArgoApps() ([]ArgoApp, error) {
-	data, err := c.get("/apis/argoproj.io/v1alpha1/namespaces/" + c.argoNS + "/applications")
+	data, err := c.k8s.Get("/apis/argoproj.io/v1alpha1/namespaces/" + c.argoNS + "/applications")
 	if err != nil {
 		return nil, err
 	}
 
 	var apps []ArgoApp
-	for _, item := range jsonArray(data, "items") {
+	for _, item := range k8s.JsonArray(data, "items") {
 		app := item.(map[string]interface{})
 
 		a := ArgoApp{
-			Name:         jsonPath(app, "metadata", "name"),
-			Namespace:    jsonPath(app, "metadata", "namespace"),
-			SyncStatus:   jsonPath(app, "status", "sync", "status"),
-			HealthStatus: jsonPath(app, "status", "health", "status"),
-			RepoURL:      jsonPath(app, "spec", "source", "repoURL"),
-			Path:         jsonPath(app, "spec", "source", "path"),
+			Name:         k8s.JsonPath(app, "metadata", "name"),
+			Namespace:    k8s.JsonPath(app, "metadata", "namespace"),
+			SyncStatus:   k8s.JsonPath(app, "status", "sync", "status"),
+			HealthStatus: k8s.JsonPath(app, "status", "health", "status"),
+			RepoURL:      k8s.JsonPath(app, "spec", "source", "repoURL"),
+			Path:         k8s.JsonPath(app, "spec", "source", "path"),
 		}
 
-		for _, r := range jsonArray(app, "status", "resources") {
+		for _, r := range k8s.JsonArray(app, "status", "resources") {
 			res := r.(map[string]interface{})
 			syncStatus := ""
 			if s, ok := res["status"].(string); ok {
@@ -1205,7 +1230,7 @@ func (c *Client) fetchArgoApps() ([]ArgoApp, error) {
 			if syncStatus != "" && syncStatus != "Synced" || healthStatus == "Degraded" || healthStatus == "Missing" {
 				a.Resources = append(a.Resources, ArgoResource{
 					Kind:      res["kind"].(string),
-					Namespace: stringOrEmpty(res, "namespace"),
+					Namespace: k8s.StringOrEmpty(res, "namespace"),
 					Name:      res["name"].(string),
 					Status:    syncStatus,
 					Health:    healthStatus,
@@ -1214,7 +1239,7 @@ func (c *Client) fetchArgoApps() ([]ArgoApp, error) {
 			}
 		}
 
-		for _, cond := range jsonArray(app, "status", "conditions") {
+		for _, cond := range k8s.JsonArray(app, "status", "conditions") {
 			cm := cond.(map[string]interface{})
 			if msg, ok := cm["message"].(string); ok {
 				a.Conditions = append(a.Conditions, msg)
@@ -1228,24 +1253,12 @@ func (c *Client) fetchArgoApps() ([]ArgoApp, error) {
 }
 
 func (c *Client) DeleteArgoApp(appName string) error {
-	url := fmt.Sprintf("%s/apis/argoproj.io/v1alpha1/namespaces/%s/applications/%s",
-		c.apiURL, c.argoNS, appName)
+	path := fmt.Sprintf("/apis/argoproj.io/v1alpha1/namespaces/%s/applications/%s",
+		c.argoNS, appName)
 
-	req, err := http.NewRequest("DELETE", url, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-
-	resp, err := c.httpClient.Do(req)
+	err := c.k8s.Delete(path)
 	if err != nil {
 		return fmt.Errorf("delete request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusNotFound {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("delete returned %d: %s", resp.StatusCode, string(body))
 	}
 
 	c.mu.Lock()
@@ -1256,27 +1269,35 @@ func (c *Client) DeleteArgoApp(appName string) error {
 }
 
 func (c *Client) SyncArgoApp(appName string) error {
-	url := fmt.Sprintf("%s/apis/argoproj.io/v1alpha1/namespaces/%s/applications/%s",
-		c.apiURL, c.argoNS, appName)
+	path := fmt.Sprintf("/apis/argoproj.io/v1alpha1/namespaces/%s/applications/%s",
+		c.argoNS, appName)
 
-	appData, err := c.get(fmt.Sprintf("/apis/argoproj.io/v1alpha1/namespaces/%s/applications/%s", c.argoNS, appName))
+	appData, err := c.k8s.Get(path)
 	if err != nil {
 		return fmt.Errorf("get app: %w", err)
 	}
 
-	revision := jsonPath(appData, "status", "sync", "revision")
+	revision := k8s.JsonPath(appData, "status", "sync", "revision")
 
-	patchBody := fmt.Sprintf(`{"operation":{"initiatedBy":{"username":"gitops-ui"},"sync":{"revision":"%s"}}}`, revision)
+	patchObj := map[string]interface{}{
+		"operation": map[string]interface{}{
+			"initiatedBy": map[string]interface{}{"username": "gitops-ui"},
+			"sync":        map[string]interface{}{"revision": revision},
+		},
+	}
+	patchBody, err := json.Marshal(patchObj)
+	if err != nil {
+		return fmt.Errorf("marshal patch: %w", err)
+	}
 
-	req, err := http.NewRequest("PATCH", url, nil)
+	req, err := http.NewRequest("PATCH", c.k8s.APIURL+path, bytes.NewReader(patchBody))
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Authorization", "Bearer "+c.k8s.Token)
 	req.Header.Set("Content-Type", "application/merge-patch+json")
-	req.Body = io.NopCloser(stringReader(patchBody))
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.k8s.HTTPClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("sync request: %w", err)
 	}
@@ -1288,103 +1309,4 @@ func (c *Client) SyncArgoApp(appName string) error {
 	}
 
 	return nil
-}
-
-func (c *Client) get(path string) (map[string]interface{}, error) {
-	req, err := http.NewRequest("GET", c.apiURL+path, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
-	}
-
-	var result map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
-	}
-	return result, nil
-}
-
-func jsonPath(data map[string]interface{}, keys ...string) string {
-	current := data
-	for i, key := range keys {
-		if i == len(keys)-1 {
-			if v, ok := current[key].(string); ok {
-				return v
-			}
-			return ""
-		}
-		if next, ok := current[key].(map[string]interface{}); ok {
-			current = next
-		} else {
-			return ""
-		}
-	}
-	return ""
-}
-
-func jsonArray(data map[string]interface{}, keys ...string) []interface{} {
-	current := data
-	for i, key := range keys {
-		if i == len(keys)-1 {
-			if v, ok := current[key].([]interface{}); ok {
-				return v
-			}
-			return nil
-		}
-		if next, ok := current[key].(map[string]interface{}); ok {
-			current = next
-		} else {
-			return nil
-		}
-	}
-	return nil
-}
-
-func jsonMap(data map[string]interface{}, keys ...string) map[string]interface{} {
-	current := data
-	for _, key := range keys {
-		if next, ok := current[key].(map[string]interface{}); ok {
-			current = next
-		} else {
-			return nil
-		}
-	}
-	return current
-}
-
-func stringOrEmpty(m map[string]interface{}, key string) string {
-	if v, ok := m[key].(string); ok {
-		return v
-	}
-	return ""
-}
-
-type stringReaderType struct {
-	s string
-	i int
-}
-
-func (r *stringReaderType) Read(p []byte) (n int, err error) {
-	if r.i >= len(r.s) {
-		return 0, io.EOF
-	}
-	n = copy(p, r.s[r.i:])
-	r.i += n
-	return
-}
-
-func stringReader(s string) io.Reader {
-	return &stringReaderType{s: s}
 }

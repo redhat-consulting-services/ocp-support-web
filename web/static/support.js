@@ -38,8 +38,8 @@
         setTimeout(() => { if (li.parentNode) li.remove(); }, 8000);
     }
 
-    window.stopJob = async function(jobId, type) {
-        if (!confirm('Are you sure you want to stop the ' + labelFor(type) + ' job?')) return;
+    window.stopJob = async function(jobId, label) {
+        if (!confirm('Are you sure you want to stop the ' + label + ' job?')) return;
         const btn = document.getElementById('stop-' + jobId);
         if (btn) {
             btn.disabled = true;
@@ -200,13 +200,38 @@
         }
     }
 
-    // Gather type card selection
-    let selectedType = 'default';
+    // Gather type card selection (multi-select toggle)
+    // Default is always included — selectedTypes tracks extras only
+    let selectedTypes = new Set();
     document.querySelectorAll('.gather-type-card').forEach(card => {
         card.addEventListener('click', () => {
-            document.querySelectorAll('.gather-type-card').forEach(c => c.classList.remove('selected'));
-            card.classList.add('selected');
-            selectedType = card.dataset.type;
+            const type = card.dataset.type;
+            // "all" is exclusive — selecting it clears others and vice versa
+            if (type === 'all') {
+                if (selectedTypes.has('all')) {
+                    selectedTypes.delete('all');
+                    card.classList.remove('selected');
+                    return;
+                }
+                selectedTypes.clear();
+                selectedTypes.add('all');
+                document.querySelectorAll('.gather-type-card').forEach(c => c.classList.remove('selected'));
+                card.classList.add('selected');
+                return;
+            }
+            // Deselect "all" when picking individual types
+            var allCard = document.querySelector('.gather-type-card[data-type="all"]');
+            if (selectedTypes.has('all')) {
+                selectedTypes.delete('all');
+                if (allCard) allCard.classList.remove('selected');
+            }
+            if (selectedTypes.has(type)) {
+                selectedTypes.delete(type);
+                card.classList.remove('selected');
+            } else {
+                selectedTypes.add(type);
+                card.classList.add('selected');
+            }
         });
     });
 
@@ -214,25 +239,35 @@
     startBtn.addEventListener('click', () => startGather());
 
     async function startGather() {
-        const type = selectedType;
+        // Always include default — selectedTypes only has extras
+        const types = selectedTypes.has('all') ? ['all'] : ['default'].concat(Array.from(selectedTypes));
         startBtn.disabled = true;
         startBtn.textContent = 'Starting...';
         const anonOpts = {
-            ips: anonIPs.checked,
-            macs: anonMACs.checked,
-            domains: anonDomains.checked,
-            services: anonServices.checked
+            ips: anonymizeEnabled && anonIPs.checked,
+            macs: anonymizeEnabled && anonMACs.checked,
+            domains: anonymizeEnabled && anonDomains.checked,
+            services: anonymizeEnabled && anonServices.checked
         };
         const anonymize = anonOpts.ips || anonOpts.macs || anonOpts.domains || anonOpts.services;
         const since = sinceEnabled ? sinceSelect.value : '';
         const nodeName = nodeNameSelect ? nodeNameSelect.value : '';
         const nodeSelector = nodeSelectorSelect ? nodeSelectorSelect.value : '';
         const hostNetwork = hostNetworkEnabled;
+        // Build a display label from selected types
+        var typeLabel;
+        if (selectedTypes.has('all')) {
+            typeLabel = 'Gather All';
+        } else if (selectedTypes.size === 0) {
+            typeLabel = 'Default Must-Gather';
+        } else {
+            typeLabel = 'Default + ' + Array.from(selectedTypes).map(function(t) { return labelFor(t); }).join(', ');
+        }
         try {
             const res = await fetch('/api/support/gather', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({type, anonymize, anonOpts, since, nodeName, nodeSelector, hostNetwork})
+                body: JSON.stringify({types, anonymize, anonOpts, since, nodeName, nodeSelector, hostNetwork})
             });
             const data = await res.json();
             if (data.error) {
@@ -240,9 +275,9 @@
                 return;
             }
             activeJobs[data.id] = true;
-            addJobCard(data.id, type, anonymize, since);
+            addJobCard(data.id, typeLabel, anonymize, since);
             startPolling();
-            showToast(labelFor(type) + ' started', 'Must-gather job is now running.', 'success', data.id);
+            showToast(typeLabel + ' started', 'Must-gather job is now running.', 'success', data.id);
         } catch (e) {
             showToast('Failed to start gather', e.message, 'danger');
         } finally {
@@ -274,6 +309,7 @@
             'lvms': 'LVMS',
             'audit': 'Audit Logs',
             'all': 'Gather All',
+            'multi': 'Default + Extras',
             'etcd-backup': 'Etcd Backup'
         };
         return labels[type] || type;
@@ -289,12 +325,12 @@
         return s + 's';
     }
 
-    function addJobCard(id, type, anonymize, since) {
+    function addJobCard(id, label, anonymize, since) {
         jobsEmpty.classList.add('hidden');
         if (document.getElementById('job-' + id)) return;
 
         const safeId = escapeHtml(id);
-        const safeLabel = escapeHtml(labelFor(type));
+        const safeLabel = escapeHtml(label);
         const sinceLabel = since ? ' (' + escapeHtml(since.replace('h', ' hours')) + ')' : '';
         const card = document.createElement('div');
         card.id = 'job-' + id;
@@ -310,7 +346,7 @@
                         <span class="pf-v5-u-font-size-sm pf-v5-u-color-200" id="elapsed-${safeId}"></span>
                     </div>
                     <div id="actions-${safeId}">
-                        <button class="pf-v5-c-button pf-m-danger pf-m-small" id="stop-${safeId}" onclick="stopJob('${safeId}', '${escapeHtml(type)}')" style="display:inline-flex;align-items:center;gap:4px;">
+                        <button class="pf-v5-c-button pf-m-danger pf-m-small" id="stop-${safeId}" onclick="stopJob('${safeId}', '${safeLabel}')" style="display:inline-flex;align-items:center;gap:4px;">
                             <svg style="width:14px;height:14px;fill:currentColor" viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10" rx="1"/></svg>
                             Stop</button>
                     </div>
@@ -320,14 +356,12 @@
                 <div class="pf-v5-u-mb-sm pf-v5-u-font-size-sm" id="step-label-${safeId}">Initializing...</div>
                 <div class="pf-v5-c-progress pf-v5-u-mb-md" id="progress-${safeId}">
                     <div class="pf-v5-c-progress__description" id="progress-text-${safeId}"></div>
+                    <div class="pf-v5-c-progress__status"><span class="pf-v5-c-progress__measure" id="progress-pct-${safeId}"></span></div>
                     <div class="pf-v5-c-progress__bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-                        <div class="pf-v5-c-progress__indicator" id="progress-bar-${safeId}" style="width: 0%; transition: width 0.5s ease;">
-                            <span class="pf-v5-c-progress__measure" id="progress-pct-${safeId}"></span>
-                        </div>
+                        <div class="pf-v5-c-progress__indicator" id="progress-bar-${safeId}" style="width: 0%; transition: width 0.5s ease;"></div>
                     </div>
                 </div>
-                <div class="step-tabs" id="step-tabs-${safeId}"></div>
-                <pre class="pf-v5-u-font-size-xs" id="log-${safeId}" style="max-height:300px;overflow-y:auto;background:#1b1d21;color:#d2d2d2;padding:10px;border-radius:4px;white-space:pre-wrap;font-family:'Red Hat Mono',monospace;line-height:1.4;"></pre>
+                <pre class="pf-v5-u-font-size-xs log-terminal" id="log-${safeId}" style="max-height:300px;overflow-y:auto;"></pre>
             </div>`;
         jobsContainer.prepend(card);
     }
@@ -361,100 +395,6 @@
         }
     }
 
-    // Track which step tab is selected per job (null = auto-follow active step)
-    const selectedStepTab = {};
-
-    function parseSteps(logOutput) {
-        const steps = [];
-        if (!logOutput) return steps;
-        const lines = logOutput.split('\n');
-        let current = null;
-        for (const line of lines) {
-            const startMatch = line.match(/^=== Step (\d+)\/(\d+): (.+) ===$/);
-            if (startMatch) {
-                if (current) steps.push(current);
-                current = { num: parseInt(startMatch[1]), total: parseInt(startMatch[2]), label: startMatch[3], lines: [], status: 'running' };
-                continue;
-            }
-            const completeMatch = line.match(/^=== (.+) complete ===$/);
-            if (completeMatch && current) {
-                current.status = 'complete';
-                current.lines.push(line);
-                steps.push(current);
-                current = null;
-                continue;
-            }
-            const failedMatch = line.match(/^=== (.+) failed ===$/);
-            if (failedMatch && current) {
-                current.status = 'failed';
-                current.lines.push(line);
-                steps.push(current);
-                current = null;
-                continue;
-            }
-            if (current) {
-                current.lines.push(line);
-            }
-        }
-        if (current) steps.push(current);
-        return steps;
-    }
-
-    function renderStepTabs(jobId, steps, jobStatus) {
-        const tabsEl = document.getElementById('step-tabs-' + jobId);
-        if (!tabsEl || steps.length <= 1) return;
-
-        const activeStep = selectedStepTab[jobId];
-        tabsEl.innerHTML = '';
-        for (const step of steps) {
-            const tab = document.createElement('span');
-            tab.className = 'step-tab';
-            if (step.status === 'running') tab.classList.add('step-running');
-            else if (step.status === 'complete') tab.classList.add('step-complete');
-            else if (step.status === 'failed') tab.classList.add('step-failed');
-
-            const isActive = activeStep === step.num || (activeStep == null && step.status === 'running');
-            if (isActive) tab.classList.add('active');
-
-            let icon = '';
-            if (step.status === 'complete') icon = '<span class="step-icon">✓</span>';
-            else if (step.status === 'failed') icon = '<span class="step-icon">✗</span>';
-            else if (step.status === 'running') icon = '<span class="step-icon btn-spinner" style="width:11px;height:11px;border-width:1.5px;margin:0;"></span>';
-
-            tab.innerHTML = icon + escapeHtml(step.num + '. ' + step.label);
-            tab.addEventListener('click', () => {
-                selectedStepTab[jobId] = (selectedStepTab[jobId] === step.num) ? null : step.num;
-                renderStepTabs(jobId, steps, jobStatus);
-                showStepLog(jobId, steps);
-            });
-            tabsEl.appendChild(tab);
-        }
-
-        // When job completes and still auto-following, reset to show full log
-        if ((jobStatus === 'complete' || jobStatus === 'failed') && activeStep == null) {
-            selectedStepTab[jobId] = null;
-        }
-    }
-
-    function showStepLog(jobId, steps) {
-        const logEl = document.getElementById('log-' + jobId);
-        if (!logEl) return;
-        const active = selectedStepTab[jobId];
-        if (active == null) {
-            // Restore full log from data attribute
-            if (logEl.dataset.fullLog) {
-                logEl.textContent = logEl.dataset.fullLog;
-                logEl.scrollTop = logEl.scrollHeight;
-            }
-            return;
-        }
-        const step = steps.find(s => s.num === active);
-        if (step) {
-            logEl.textContent = '=== Step ' + step.num + '/' + step.total + ': ' + step.label + ' ===\n' + step.lines.join('\n');
-            logEl.scrollTop = logEl.scrollHeight;
-        }
-    }
-
     function updateJobUI(job) {
         const logEl = document.getElementById('log-' + job.id);
         const statusEl = document.getElementById('status-' + job.id);
@@ -467,18 +407,9 @@
         const actionsEl = document.getElementById('actions-' + job.id);
         if (!logEl) return;
 
-        const steps = parseSteps(job.logOutput);
-        renderStepTabs(job.id, steps, job.status);
-
         if (job.logOutput) {
-            logEl.dataset.fullLog = job.logOutput;
-            const active = selectedStepTab[job.id];
-            if (active == null) {
-                logEl.textContent = job.logOutput;
-                logEl.scrollTop = logEl.scrollHeight;
-            } else {
-                showStepLog(job.id, steps);
-            }
+            logEl.textContent = job.logOutput;
+            logEl.scrollTop = logEl.scrollHeight;
         }
 
         if (elapsedEl && job.startedAt) {
@@ -542,7 +473,7 @@
             jobsEmpty.classList.add('hidden');
             jobs.sort((a, b) => new Date(b.startedAt) - new Date(a.startedAt));
             for (const job of jobs) {
-                addJobCard(job.id, job.type, job.anonymize, job.since);
+                addJobCard(job.id, labelFor(job.type), job.anonymize, job.since);
                 updateJobUI(job);
                 if (job.status === 'running') {
                     activeJobs[job.id] = true;
@@ -575,7 +506,7 @@
                     return;
                 }
                 activeJobs[data.id] = true;
-                addJobCard(data.id, 'etcd-backup', false, '');
+                addJobCard(data.id, labelFor('etcd-backup'), false, '');
                 startPolling();
                 showToast('Etcd Backup started', 'Backup job is now running.', 'success', data.id);
             } catch (e) {
@@ -635,7 +566,7 @@
             objectType = diagObjectSelect.value;
             if (!objectType) {
                 diagObjectSelect.focus();
-                diagObjectSelect.style.borderColor = '#c9190b';
+                diagObjectSelect.style.borderColor = 'var(--pf-v5-global--danger-color--100)';
                 setTimeout(() => diagObjectSelect.style.borderColor = '', 2000);
                 return;
             }
@@ -678,7 +609,7 @@
         const placeholder = document.createElement('div');
         placeholder.id = placeholderId;
         placeholder.className = 'pf-v5-c-card pf-v5-u-mb-md';
-        placeholder.style.border = '1px solid #d2d2d2';
+        placeholder.style.border = '1px solid var(--pf-v5-global--BorderColor--100)';
         placeholder.innerHTML = `<div class="pf-v5-c-card__title"><h3 class="pf-v5-c-card__title-text">${escapeHtml(title)}</h3></div>
             <div class="pf-v5-c-card__body pf-v5-u-text-align-center pf-v5-u-py-lg">
                 <span class="pf-v5-c-spinner pf-m-md" role="progressbar"><span class="pf-v5-c-spinner__clipper"></span><span class="pf-v5-c-spinner__lead-ball"></span><span class="pf-v5-c-spinner__tail-ball"></span></span>
@@ -744,7 +675,7 @@
             bodyHtml = `<div class="pf-v5-u-danger-color-100 pf-v5-u-mb-md">Error: ${escapeHtmlDiag(error)}</div>`;
         }
         if (output) {
-            bodyHtml += `<pre id="${resultId}" style="max-height:400px;overflow:auto;background:#1b1d21;color:#d2d2d2;padding:10px;border-radius:4px;white-space:pre-wrap;font-family:'Red Hat Mono',monospace;font-size:12px;line-height:1.4;">${escapeHtmlDiag(output)}</pre>`;
+            bodyHtml += `<pre class="log-terminal" id="${resultId}" style="max-height:400px;overflow:auto;font-size:12px;">${escapeHtmlDiag(output)}</pre>`;
         } else if (!error) {
             bodyHtml = '<span class="pf-v5-u-color-200">No output returned</span>';
         }
@@ -822,6 +753,10 @@
                     acmCard.querySelector('.gather-type-card__desc').textContent =
                         'Advanced Cluster Management v' + caps.acmVersion;
                 }
+            }
+            if (caps.acm) {
+                var acmNav = document.getElementById('acm-nav');
+                if (acmNav) acmNav.style.display = '';
             }
             const capMap = {
                 logging: {type: 'logging', versionKey: 'loggingVersion', label: 'Logging'},

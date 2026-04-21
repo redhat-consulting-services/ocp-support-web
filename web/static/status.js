@@ -103,14 +103,14 @@
     }
 
     function utilBar(usagePct, requestPct, label) {
-        const usageColor = usagePct > 90 ? '#c9190b' : usagePct > 70 ? '#f0ab00' : '#3e8635';
-        const reqColor = '#06c';
+        const usageColor = usagePct > 90 ? 'var(--pf-v5-global--danger-color--100)' : usagePct > 70 ? 'var(--pf-v5-global--warning-color--100)' : 'var(--pf-v5-global--success-color--100)';
+        const reqColor = 'var(--pf-v5-global--link--Color)';
         const cappedUsage = Math.min(usagePct, 100);
         const cappedReq = Math.min(requestPct, 100);
-        return `<div style="position:relative;height:18px;background:#f0f0f0;border-radius:3px;overflow:visible;margin:2px 0;">
+        return `<div style="position:relative;height:18px;background:var(--pf-v5-global--BackgroundColor--200);border-radius:3px;overflow:visible;margin:2px 0;">
             <div style="position:absolute;height:100%;width:${cappedReq}%;background:${reqColor};opacity:0.2;border-radius:3px;" title="Requests: ${requestPct.toFixed(0)}%"></div>
             <div style="position:absolute;height:100%;width:${cappedUsage}%;background:${usageColor};border-radius:3px;" title="Usage: ${usagePct.toFixed(0)}%"></div>
-            <span style="position:absolute;right:4px;top:1px;font-size:11px;color:#333;font-weight:600;">${label}</span>
+            <span style="position:absolute;right:4px;top:1px;font-size:11px;color:var(--pf-v5-global--Color--100);font-weight:600;">${label}</span>
         </div>`;
     }
 
@@ -180,8 +180,8 @@
 
         html += '</tbody></table>';
         html += `<div class="pf-v5-u-font-size-xs pf-v5-u-color-200 pf-v5-u-mt-sm">
-            <span style="display:inline-block;width:12px;height:12px;background:#3e8635;border-radius:2px;vertical-align:middle;margin-right:4px;"></span>Usage
-            <span style="display:inline-block;width:12px;height:12px;background:#06c;opacity:0.2;border-radius:2px;vertical-align:middle;margin-left:12px;margin-right:4px;"></span>Requests
+            <span style="display:inline-block;width:12px;height:12px;background:var(--pf-v5-global--success-color--100);border-radius:2px;vertical-align:middle;margin-right:4px;"></span>Usage
+            <span style="display:inline-block;width:12px;height:12px;background:var(--pf-v5-global--link--Color);opacity:0.2;border-radius:2px;vertical-align:middle;margin-left:12px;margin-right:4px;"></span>Requests
             <span style="margin-left:12px;">Overcommitted when requests &gt; 100%</span>
         </div>`;
 
@@ -307,7 +307,7 @@
 
         for (const n of nodes) {
             const statusColor = n.status === 'Ready' ? 'green' : 'red';
-            const usageColor = n.gpuUsagePct > 90 ? '#c9190b' : n.gpuUsagePct > 70 ? '#f0ab00' : '#3e8635';
+            const usageColor = n.gpuUsagePct > 90 ? 'var(--pf-v5-global--danger-color--100)' : n.gpuUsagePct > 70 ? 'var(--pf-v5-global--warning-color--100)' : 'var(--pf-v5-global--success-color--100)';
             const cappedUsage = Math.min(n.gpuUsagePct, 100);
             const gpuLabel = `${n.gpuUsed} / ${n.gpuCapacity}`;
 
@@ -325,9 +325,9 @@
                 <td><span class="pf-v5-u-font-size-sm">${escapeHtml(n.gpuType || 'Unknown')}</span></td>
                 <td><span class="pf-v5-c-label pf-m-${statusColor}"><span class="pf-v5-c-label__content">${escapeHtml(n.status)}</span></span></td>
                 <td>
-                    <div style="position:relative;height:18px;background:#f0f0f0;border-radius:3px;overflow:visible;margin:2px 0;">
+                    <div style="position:relative;height:18px;background:var(--pf-v5-global--BackgroundColor--200);border-radius:3px;overflow:visible;margin:2px 0;">
                         <div style="position:absolute;height:100%;width:${cappedUsage}%;background:${usageColor};border-radius:3px;" title="Used: ${n.gpuUsagePct.toFixed(0)}%"></div>
-                        <span style="position:absolute;right:4px;top:1px;font-size:11px;color:#333;font-weight:600;">${gpuLabel}</span>
+                        <span style="position:absolute;right:4px;top:1px;font-size:11px;color:var(--pf-v5-global--Color--100);font-weight:600;">${gpuLabel}</span>
                     </div>
                     <div class="pf-v5-l-flex pf-m-justify-content-space-between" style="margin-top:2px;">
                         <span class="pf-v5-u-font-size-xs pf-v5-u-color-200">${n.gpuFree} free</span>
@@ -461,6 +461,10 @@
             if (caps.cnv) {
                 const vmsCard = document.getElementById('top-vms-card');
                 if (vmsCard) vmsCard.style.display = '';
+            }
+            if (caps.acm) {
+                var acmNav = document.getElementById('acm-nav');
+                if (acmNav) acmNav.style.display = '';
             }
         } catch (e) {
             // ignore

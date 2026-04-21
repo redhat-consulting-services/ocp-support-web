@@ -82,13 +82,13 @@ oc apply -f "$SCRIPT_DIR/deploy/service.yaml"
 # Step 8: Deploy with actual image, cluster domain, and cookie secret
 echo "--- Creating deployment..."
 cat "$SCRIPT_DIR/deploy/deployment.yaml" \
-    | sed "s|IMAGE_PLACEHOLDER|${IMAGE_REF}|g" \
     | sed "s|OAUTH_PROXY_IMAGE_PLACEHOLDER|${OAUTH_PROXY_IMAGE}|g" \
-    | sed "s|CLUSTER_DOMAIN_PLACEHOLDER|${CLUSTER_DOMAIN}|g" \
-    | sed "s|COOKIE_SECRET_PLACEHOLDER|${COOKIE_SECRET}|g" \
     | sed "s|DEFAULT_MG_IMAGE_PLACEHOLDER|${DEFAULT_MUST_GATHER_IMAGE}|g" \
     | sed "s|CNV_IMAGE_PLACEHOLDER|${CNV_MUST_GATHER_IMAGE}|g" \
     | sed "s|ODF_IMAGE_PLACEHOLDER|${ODF_MUST_GATHER_IMAGE}|g" \
+    | sed "s|IMAGE_PLACEHOLDER|${IMAGE_REF}|g" \
+    | sed "s|CLUSTER_DOMAIN_PLACEHOLDER|${CLUSTER_DOMAIN}|g" \
+    | sed "s|COOKIE_SECRET_PLACEHOLDER|${COOKIE_SECRET}|g" \
     | oc apply -f -
 
 # Step 9: Create route
