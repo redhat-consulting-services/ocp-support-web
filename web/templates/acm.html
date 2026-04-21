@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ACM Gathers - OCP Support Web</title>
+    <link rel="icon" type="image/svg+xml" href="/static/logo.svg">
+    <link rel="stylesheet" href="https://unpkg.com/@patternfly/patternfly@5/patternfly.min.css">
+    <link rel="stylesheet" href="/static/style.css">
+    <script>(function(){var t=localStorage.getItem('theme');if(t==='dark'||(!t&&window.matchMedia('(prefers-color-scheme:dark)').matches))document.documentElement.classList.add('pf-v5-theme-dark');})()</script>
+</head>
+<body>
+    <ul class="pf-v5-c-alert-group pf-m-toast" id="toast-container"></ul>
+    <div class="pf-v5-c-page">
+        <header class="pf-v5-c-masthead">
+            <div class="pf-v5-c-masthead__main">
+                <a class="pf-v5-c-masthead__brand" href="/" style="display:flex;align-items:center;gap:10px;text-decoration:none;color:inherit;">
+                    <img src="/static/logo.svg" alt="" width="36" height="36">
+                    <span>OCP Support Web</span>
+                </a>
+            </div>
+            <div class="pf-v5-c-masthead__content">
+                <nav class="pf-v5-c-nav pf-m-horizontal">
+                    <ul class="pf-v5-c-nav__list">
+                        <li class="pf-v5-c-nav__item"><a href="/" class="pf-v5-c-nav__link">Support</a></li>
+                        <li class="pf-v5-c-nav__item"><a href="/status" class="pf-v5-c-nav__link">Status</a></li>
+                        <li class="pf-v5-c-nav__item"><a href="/advanced" class="pf-v5-c-nav__link">Advanced</a></li>
+                        <li class="pf-v5-c-nav__item"><a href="/resources" class="pf-v5-c-nav__link">Resources</a></li>
+                        <li class="pf-v5-c-nav__item"><a href="/acm" class="pf-v5-c-nav__link pf-m-current">ACM Gathers</a></li>
+                    </ul>
+                </nav>
+                <div class="pf-v5-l-flex pf-m-align-items-center pf-m-gap-sm" style="margin-left:auto;">
+                    <button class="pf-v5-c-button pf-m-plain" id="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+                        <svg id="theme-icon-sun" fill="currentColor" height="1em" width="1em" viewBox="0 0 512 512" style="display:none;"><path d="M256 160c-52.9 0-96 43.1-96 96s43.1 96 96 96 96-43.1 96-96-43.1-96-96-96zm246.4 80.5l-94.7-47.3 33.5-100.4c4.5-13.6-8.4-26.5-21.9-21.9l-100.4 33.5-47.4-94.8c-6.4-12.8-24.6-12.8-31 0l-47.3 94.7L92.7 70.8c-13.6-4.5-26.5 8.4-21.9 21.9l33.5 100.4-94.7 47.4c-12.8 6.4-12.8 24.6 0 31l94.7 47.3-33.5 100.5c-4.5 13.6 8.4 26.5 21.9 21.9l100.4-33.5 47.3 94.7c6.4 12.8 24.6 12.8 31 0l47.3-94.7 100.4 33.5c13.6 4.5 26.5-8.4 21.9-21.9l-33.5-100.4 94.7-47.3c12.8-6.4 12.8-24.6 0-31z"/></svg>
+                        <svg id="theme-icon-moon" fill="currentColor" height="1em" width="1em" viewBox="0 0 512 512"><path d="M283.2 512c78.5 0 150.7-35.6 198.8-96.6 5.8-7.4 1.5-18.2-7.8-19.2-10.9-1.2-21.6-3.3-32.1-6.3-105.2-30.1-165.5-140.5-135.4-245.7 14.4-50.3 49.8-91.4 96.6-112.6 8.3-3.7 9.8-15-2.5-19.7C370.3 4.2 337.8 0 305.2 0 170 0 60 110 60 245.2c0 135.1 110 245.2 245.2 245.2l-22 21.6z"/></svg>
+                    </button>
+                    {{if .Username}}<div class="pf-v5-c-dropdown" id="user-dropdown" style="position:relative;">
+                        <button class="pf-v5-c-dropdown__toggle pf-m-plain" type="button" onclick="var d=this.parentElement;d.classList.toggle('pf-m-expanded');this.setAttribute('aria-expanded',d.classList.contains('pf-m-expanded'));" aria-expanded="false">
+                            <span class="pf-v5-c-dropdown__toggle-text pf-v5-u-font-size-sm">{{.Username}}</span>
+                            <span class="pf-v5-c-dropdown__toggle-icon"><svg fill="currentColor" height="1em" width="1em" viewBox="0 0 320 512"><path d="M137.4 374.6c12.5 12.5 32.8 12.5 45.3 0l128-128c9.2-9.2 11.9-22.9 6.9-34.9s-16.6-19.8-29.6-19.8L32 192c-12.9 0-24.6 7.8-29.6 19.8s-2.2 25.7 6.9 34.9l128 128z"/></svg></span>
+                        </button>
+                        <ul class="pf-v5-c-dropdown__menu" style="position:absolute;right:0;z-index:200;">
+                            <li><a class="pf-v5-c-dropdown__menu-item" href="/oauth/sign_out">Log out</a></li>
+                        </ul>
+                    </div>{{end}}
+                </div>
+            </div>
+        </header>
+        <main class="pf-v5-c-page__main" tabindex="-1">
+            <section class="pf-v5-c-page__main-section pf-m-light">
+                <div class="pf-v5-c-content">
+                    <h1>ACM - Multi-Cluster Must-Gather</h1>
+                    <p>Run must-gather on managed clusters via the support agent. Archives are downloaded to the hub for review.</p>
+                </div>
+            </section>
+            <section class="pf-v5-c-page__main-section">
+                <div class="pf-v5-c-card pf-v5-u-mb-lg">
+                    <div class="pf-v5-c-card__title"><h2 class="pf-v5-c-card__title-text">Managed Clusters</h2></div>
+                    <div class="pf-v5-c-card__body">
+                        <div id="clusters-loading" class="pf-v5-u-text-align-center pf-v5-u-py-lg">
+                            <span class="pf-v5-c-spinner pf-m-md" role="progressbar"><span class="pf-v5-c-spinner__clipper"></span><span class="pf-v5-c-spinner__lead-ball"></span><span class="pf-v5-c-spinner__tail-ball"></span></span>
+                            <p class="pf-v5-u-mt-sm pf-v5-u-font-size-sm">Loading managed clusters...</p>
+                        </div>
+                        <div id="clusters-error" class="hidden pf-v5-u-danger-color-100 pf-v5-u-mb-md"></div>
+                        <div id="clusters-empty" class="hidden pf-v5-u-text-align-center pf-v5-u-py-xl pf-v5-u-color-300">
+                            No remote managed clusters found. Only the local hub cluster (local-cluster) is registered.
+                            <br><span class="pf-v5-u-font-size-xs">Import managed clusters in the ACM console to enable remote must-gather.</span>
+                        </div>
+                        <table class="pf-v5-c-table pf-m-grid-md" id="clusters-table" style="display:none;">
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Status</th>
+                                    <th>OCP Version</th>
+                                    <th>Platform</th>
+                                    <th>Agent</th>
+                                    <th>Agent Version</th>
+                                    <th>Gather</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody id="clusters-tbody"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="pf-v5-c-card">
+                    <div class="pf-v5-c-card__title"><h2 class="pf-v5-c-card__title-text">Remote Gather Jobs</h2></div>
+                    <div class="pf-v5-c-card__body">
+                        <div id="jobs-empty" class="pf-v5-u-text-align-center pf-v5-u-py-xl pf-v5-u-color-300">
+                            No remote gather jobs. Click "Start Gather" on a managed cluster above.
+                        </div>
+                        <div id="jobs-container"></div>
+                    </div>
+                </div>
+            </section>
+        </main>
+        <footer class="app-footer">This is a community application and is not supported by Red Hat. {{if .Version}}<span style="float:right;opacity:0.6;">v{{.Version}}</span>{{end}}</footer>
+    </div>
+    <!-- Gather type selection modal -->
+    <div class="pf-v5-c-backdrop" id="gather-modal-backdrop" style="display:none;">
+        <div class="pf-v5-l-bullseye">
+            <div class="pf-v5-c-modal-box" style="max-width:600px;">
+                <div class="pf-v5-c-modal-box__close">
+                    <button class="pf-v5-c-button pf-m-plain" aria-label="Close" onclick="closeGatherModal()">
+                        <svg fill="currentColor" height="1em" width="1em" viewBox="0 0 352 512"><path d="M242.72 256l100.07-100.07c12.28-12.28 12.28-32.19 0-44.48l-22.24-22.24c-12.28-12.28-32.19-12.28-44.48 0L176 189.28 75.93 89.21c-12.28-12.28-32.19-12.28-44.48 0L9.21 111.45c-12.28 12.29-12.28 32.2 0 44.48L109.28 256 9.21 356.07c-12.28 12.28-12.28 32.19 0 44.48l22.24 22.24c12.28 12.28 32.2 12.28 44.48 0L176 322.72l100.07 100.07c12.28 12.28 32.2 12.28 44.48 0l22.24-22.24c12.28-12.28 12.28-32.19 0-44.48L242.72 256z"/></svg>
+                    </button>
+                </div>
+                <header class="pf-v5-c-modal-box__header">
+                    <h1 class="pf-v5-c-modal-box__title">Start Remote Gather: <span id="modal-cluster-name"></span></h1>
+                </header>
+                <div class="pf-v5-c-modal-box__body">
+                    <p class="pf-v5-u-font-size-sm pf-v5-u-mb-md"><strong>Default must-gather</strong> always runs. Select additional operator gathers:</p>
+                    <div id="modal-operators-loading" class="pf-v5-u-text-align-center pf-v5-u-py-md hidden">
+                        <span class="pf-v5-c-spinner pf-m-sm" role="progressbar"><span class="pf-v5-c-spinner__clipper"></span><span class="pf-v5-c-spinner__lead-ball"></span><span class="pf-v5-c-spinner__tail-ball"></span></span>
+                        <span class="pf-v5-u-font-size-xs pf-v5-u-ml-sm">Detecting operators...</span>
+                    </div>
+                    <div class="gather-type-grid" id="modal-gather-types"></div>
+
+                    <div class="pf-v5-u-mt-lg" style="border-top:1px solid var(--pf-v5-global--BorderColor--100);padding-top:12px;">
+                        <div class="pf-v5-u-font-size-sm pf-v5-u-font-weight-bold pf-v5-u-mb-sm">Log Time Frame</div>
+                        <div class="pf-v5-l-flex pf-m-align-items-center pf-m-gap-sm pf-v5-u-mb-md">
+                            <select id="modal-since" class="pf-v5-c-form-control" style="width:auto;">
+                                <option value="">All logs (no limit)</option>
+                                <option value="1h">Last 1 hour</option>
+                                <option value="4h">Last 4 hours</option>
+                                <option value="8h">Last 8 hours</option>
+                                <option value="24h">Last 24 hours</option>
+                                <option value="48h">Last 48 hours</option>
+                                <option value="7d">Last 7 days</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div style="border-top:1px solid var(--pf-v5-global--BorderColor--100);padding-top:12px;">
+                        <div class="pf-v5-u-font-size-sm pf-v5-u-font-weight-bold pf-v5-u-mb-sm">Anonymization</div>
+                        <label class="pf-v5-c-switch pf-v5-u-mb-sm">
+                            <input type="checkbox" class="pf-v5-c-switch__input" id="modal-anon-toggle">
+                            <span class="pf-v5-c-switch__toggle"></span>
+                            <span class="pf-v5-c-switch__label pf-v5-u-font-size-sm">Anonymize archive before download</span>
+                        </label>
+                        <div id="modal-anon-options" class="hidden pf-v5-u-ml-md pf-v5-u-mt-xs">
+                            <label class="pf-v5-u-font-size-xs pf-v5-u-mr-md"><input type="checkbox" id="anon-ips" checked> IP addresses</label>
+                            <label class="pf-v5-u-font-size-xs pf-v5-u-mr-md"><input type="checkbox" id="anon-macs" checked> MAC addresses</label>
+                            <label class="pf-v5-u-font-size-xs pf-v5-u-mr-md"><input type="checkbox" id="anon-domains"> Domains</label>
+                            <label class="pf-v5-u-font-size-xs pf-v5-u-mr-md"><input type="checkbox" id="anon-services"> Service DNS</label>
+                            <label class="pf-v5-u-font-size-xs"><input type="checkbox" id="anon-secrets"> Secrets</label>
+                        </div>
+                    </div>
+                </div>
+                <footer class="pf-v5-c-modal-box__footer">
+                    <button class="pf-v5-c-button pf-m-primary" id="modal-start-btn" onclick="confirmGatherStart()">Start Gather</button>
+                    <button class="pf-v5-c-button pf-m-link" onclick="closeGatherModal()">Cancel</button>
+                </footer>
+            </div>
+        </div>
+    </div>
+    <script>var hubVersion = "{{.Version}}";</script>
+    <script src="/static/theme.js"></script>
+    <script src="/static/acm.js"></script>
+</body>
+</html>

@@ -7,6 +7,7 @@
     <link rel="icon" type="image/svg+xml" href="/static/logo.svg">
     <link rel="stylesheet" href="https://unpkg.com/@patternfly/patternfly@5/patternfly.min.css">
     <link rel="stylesheet" href="/static/style.css">
+    <script>(function(){var t=localStorage.getItem('theme');if(t==='dark'||(!t&&window.matchMedia('(prefers-color-scheme:dark)').matches))document.documentElement.classList.add('pf-v5-theme-dark');})()</script>
 </head>
 <body>
     <ul class="pf-v5-c-alert-group pf-m-toast" id="toast-container"></ul>
@@ -23,11 +24,26 @@
                     <ul class="pf-v5-c-nav__list">
                         <li class="pf-v5-c-nav__item"><a href="/" class="pf-v5-c-nav__link pf-m-current">Support</a></li>
                         <li class="pf-v5-c-nav__item"><a href="/status" class="pf-v5-c-nav__link">Status</a></li>
+                        <li class="pf-v5-c-nav__item"><a href="/advanced" class="pf-v5-c-nav__link">Advanced</a></li>
+                        <li class="pf-v5-c-nav__item"><a href="/resources" class="pf-v5-c-nav__link">Resources</a></li>
+                        <li class="pf-v5-c-nav__item" id="acm-nav" style="display:none;"><a href="/acm" class="pf-v5-c-nav__link">ACM Gathers</a></li>
                     </ul>
                 </nav>
-                {{if .Username}}<div class="pf-v5-l-flex pf-m-align-items-center pf-m-gap-sm" style="margin-left:auto;">
-                    <span class="pf-v5-u-font-size-sm" style="color:#fff;">{{.Username}}</span>
-                </div>{{end}}
+                <div class="pf-v5-l-flex pf-m-align-items-center pf-m-gap-sm" style="margin-left:auto;">
+                    <button class="pf-v5-c-button pf-m-plain" id="theme-toggle" onclick="toggleTheme()" title="Toggle theme">
+                        <svg id="theme-icon-sun" fill="currentColor" height="1em" width="1em" viewBox="0 0 512 512" style="display:none;"><path d="M256 160c-52.9 0-96 43.1-96 96s43.1 96 96 96 96-43.1 96-96-43.1-96-96-96zm246.4 80.5l-94.7-47.3 33.5-100.4c4.5-13.6-8.4-26.5-21.9-21.9l-100.4 33.5-47.4-94.8c-6.4-12.8-24.6-12.8-31 0l-47.3 94.7L92.7 70.8c-13.6-4.5-26.5 8.4-21.9 21.9l33.5 100.4-94.7 47.4c-12.8 6.4-12.8 24.6 0 31l94.7 47.3-33.5 100.5c-4.5 13.6 8.4 26.5 21.9 21.9l100.4-33.5 47.3 94.7c6.4 12.8 24.6 12.8 31 0l47.3-94.7 100.4 33.5c13.6 4.5 26.5-8.4 21.9-21.9l-33.5-100.4 94.7-47.3c12.8-6.4 12.8-24.6 0-31z"/></svg>
+                        <svg id="theme-icon-moon" fill="currentColor" height="1em" width="1em" viewBox="0 0 512 512"><path d="M283.2 512c78.5 0 150.7-35.6 198.8-96.6 5.8-7.4 1.5-18.2-7.8-19.2-10.9-1.2-21.6-3.3-32.1-6.3-105.2-30.1-165.5-140.5-135.4-245.7 14.4-50.3 49.8-91.4 96.6-112.6 8.3-3.7 9.8-15-2.5-19.7C370.3 4.2 337.8 0 305.2 0 170 0 60 110 60 245.2c0 135.1 110 245.2 245.2 245.2l-22 21.6z"/></svg>
+                    </button>
+                    {{if .Username}}<div class="pf-v5-c-dropdown" id="user-dropdown" style="position:relative;">
+                        <button class="pf-v5-c-dropdown__toggle pf-m-plain" type="button" onclick="var d=this.parentElement;d.classList.toggle('pf-m-expanded');this.setAttribute('aria-expanded',d.classList.contains('pf-m-expanded'));" aria-expanded="false">
+                            <span class="pf-v5-c-dropdown__toggle-text pf-v5-u-font-size-sm">{{.Username}}</span>
+                            <span class="pf-v5-c-dropdown__toggle-icon"><svg fill="currentColor" height="1em" width="1em" viewBox="0 0 320 512"><path d="M137.4 374.6c12.5 12.5 32.8 12.5 45.3 0l128-128c9.2-9.2 11.9-22.9 6.9-34.9s-16.6-19.8-29.6-19.8L32 192c-12.9 0-24.6 7.8-29.6 19.8s-2.2 25.7 6.9 34.9l128 128z"/></svg></span>
+                        </button>
+                        <ul class="pf-v5-c-dropdown__menu" style="position:absolute;right:0;z-index:200;">
+                            <li><a class="pf-v5-c-dropdown__menu-item" href="/oauth/sign_out">Log out</a></li>
+                        </ul>
+                    </div>{{end}}
+                </div>
             </div>
         </header>
         <main class="pf-v5-c-page__main" tabindex="-1">
@@ -55,12 +71,8 @@
                 <div class="pf-v5-c-card pf-v5-u-mb-lg">
                     <div class="pf-v5-c-card__title"><h2 class="pf-v5-c-card__title-text">Run Must-Gather</h2></div>
                     <div class="pf-v5-c-card__body">
-                        <div class="pf-v5-u-font-size-sm pf-v5-u-font-weight-bold pf-v5-u-mb-md">Select type</div>
+                        <div class="pf-v5-u-font-size-sm pf-v5-u-mb-md"><span class="pf-v5-u-font-weight-bold">Default Must-Gather</span> always runs. Select additional gathers below:</div>
                         <div class="gather-type-grid" id="gather-cards">
-                            <div class="gather-type-card selected" data-type="default">
-                                <div class="gather-type-card__title">Default</div>
-                                <div class="gather-type-card__desc">General cluster diagnostics and logs</div>
-                            </div>
                             <div class="gather-type-card" data-type="virtualization" style="display:none;">
                                 <div class="gather-type-card__title">Virtualization</div>
                                 <div class="gather-type-card__desc">OpenShift Virtualization / KubeVirt</div>
@@ -139,7 +151,7 @@
                             </div>
                             <div class="gather-type-card" data-type="all">
                                 <div class="gather-type-card__title">Gather All</div>
-                                <div class="gather-type-card__desc" id="all-desc">Default + all detected operators + Audit</div>
+                                <div class="gather-type-card__desc" id="all-desc">All detected operators + Audit</div>
                             </div>
                         </div>
 
@@ -173,9 +185,13 @@
                                         <input class="pf-v5-c-check__input" type="checkbox" id="anon-domains" name="anon-domains" checked>
                                         <label class="pf-v5-c-check__label pf-v5-u-font-size-sm" for="anon-domains">Domains</label>
                                     </div>
-                                    <div class="pf-v5-c-check" style="display:inline-flex;">
+                                    <div class="pf-v5-c-check" style="display:inline-flex;margin-right:4px;">
                                         <input class="pf-v5-c-check__input" type="checkbox" id="anon-services" name="anon-services" checked>
                                         <label class="pf-v5-c-check__label pf-v5-u-font-size-sm" for="anon-services">Service DNS</label>
+                                    </div>
+                                    <div class="pf-v5-c-check" style="display:inline-flex;">
+                                        <input class="pf-v5-c-check__input" type="checkbox" id="anon-secrets" name="anon-secrets">
+                                        <label class="pf-v5-c-check__label pf-v5-u-font-size-sm" for="anon-secrets">Secrets</label>
                                     </div>
                                 </div>
                                 <span class="pf-v5-u-font-size-sm pf-v5-u-color-200" id="anon-hint">Data will be sent as-is</span>
@@ -262,7 +278,7 @@
                         <p class="pf-v5-u-font-size-sm pf-v5-u-color-200 pf-v5-u-mb-lg">Analyze etcd database contents to identify large or excessive objects. Results can be copied to clipboard or saved as a text file.</p>
 
                         <div class="pf-v5-l-grid pf-m-gutter pf-m-all-12-col pf-m-all-6-col-on-lg">
-                            <div style="border:1px solid #d2d2d2;border-radius:6px;padding:20px;">
+                            <div style="border:1px solid var(--pf-v5-global--BorderColor--100);border-radius:6px;padding:20px;">
                                 <div class="pf-v5-u-font-size-md pf-v5-u-font-weight-bold pf-v5-u-mb-xs">Database Overview</div>
                                 <p class="pf-v5-u-font-size-xs pf-v5-u-color-200 pf-v5-u-mb-md">Scan the entire etcd database. These commands run directly against etcd and may take a few minutes on large clusters.</p>
                                 <div class="pf-v5-l-flex pf-m-column pf-m-gap-sm">
@@ -278,7 +294,7 @@
                                 </div>
                             </div>
 
-                            <div style="border:1px solid #d2d2d2;border-radius:6px;padding:20px;">
+                            <div style="border:1px solid var(--pf-v5-global--BorderColor--100);border-radius:6px;padding:20px;">
                                 <div class="pf-v5-u-font-size-md pf-v5-u-font-weight-bold pf-v5-u-mb-xs">Drill Down by Resource</div>
                                 <p class="pf-v5-u-font-size-xs pf-v5-u-color-200 pf-v5-u-mb-md">Pick a resource type from the overview results (e.g. <code>secrets</code>, <code>events</code>, <code>configmaps</code>) and investigate further.</p>
                                 <div class="pf-v5-u-mb-md">
@@ -292,7 +308,7 @@
                                             <option value="pods">pods</option>
                                             <option value="services">services</option>
                                             <option value="serviceaccounts">serviceaccounts</option>
-                                            <option value="endpoints">endpoints</option>
+                                            <option value="endpointslices">endpointslices</option>
                                         </optgroup>
                                         <optgroup label="Workloads">
                                             <option value="deployments">deployments</option>
@@ -354,6 +370,7 @@
         </main>
         <footer class="app-footer">This is a community application and is not supported by Red Hat. {{if .Version}}<span style="float:right;opacity:0.6;">v{{.Version}}</span>{{end}}</footer>
     </div>
+    <script src="/static/theme.js"></script>
     <script src="/static/support.js"></script>
 </body>
 </html>

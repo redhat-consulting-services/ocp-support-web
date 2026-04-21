@@ -3,17 +3,21 @@ package mustgather
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/redhat-consulting-services/ocp-support-web/internal/k8s"
 	"github.com/redhat-consulting-services/ocp-support-web/internal/metrics"
+	"go.yaml.in/yaml/v2"
 )
 
 const gatherTimeout = 60 * time.Minute
@@ -46,13 +50,24 @@ const (
 	GatherSecretsStore   GatherType = "secrets-store"
 	GatherLVMS           GatherType = "lvms"
 	GatherAll            GatherType = "all"
+	GatherMulti          GatherType = "multi"
+	GatherCustom         GatherType = "custom"
 	GatherEtcdBackup     GatherType = "etcd-backup"
 )
 
 type GatherOpts struct {
-	NodeName     string `json:"nodeName,omitempty"`
-	NodeSelector string `json:"nodeSelector,omitempty"`
-	HostNetwork  bool   `json:"hostNetwork,omitempty"`
+	NodeName      string           `json:"nodeName,omitempty"`
+	NodeSelector  string           `json:"nodeSelector,omitempty"`
+	HostNetwork   bool             `json:"hostNetwork,omitempty"`
+	Custom        *CustomGatherOpts `json:"custom,omitempty"`
+	SelectedTypes []GatherType     `json:"selectedTypes,omitempty"`
+}
+
+// CustomGatherOpts configures a custom namespace gather.
+type CustomGatherOpts struct {
+	Namespaces    []string `json:"namespaces"`
+	ResourceTypes []string `json:"resourceTypes"`
+	IncludeLogs   bool     `json:"includeLogs"`
 }
 
 type AnonOptions struct {
@@ -60,28 +75,30 @@ type AnonOptions struct {
 	MACs     bool `json:"macs"`
 	Domains  bool `json:"domains"`
 	Services bool `json:"services"`
+	Secrets  bool `json:"secrets"`
 }
 
 func (a AnonOptions) Any() bool {
-	return a.IPs || a.MACs || a.Domains || a.Services
+	return a.IPs || a.MACs || a.Domains || a.Services || a.Secrets
 }
 
 type Job struct {
-	ID          string      `json:"id"`
-	Type        GatherType  `json:"type"`
-	Status      string      `json:"status"` // running, complete, failed
-	StartedAt   time.Time   `json:"startedAt"`
-	Error       string      `json:"error,omitempty"`
-	Warning     string      `json:"warning,omitempty"`
-	FilePath    string      `json:"-"`
-	FileName    string      `json:"fileName,omitempty"`
-	Anonymize   bool        `json:"anonymize"`
-	AnonOpts    AnonOptions `json:"anonOpts,omitempty"`
-	Since       string      `json:"since,omitempty"`
-	LogOutput   string      `json:"logOutput,omitempty"`
-	Step        int         `json:"step"`
-	TotalSteps  int         `json:"totalSteps"`
-	StepLabel   string      `json:"stepLabel,omitempty"`
+	ID          string            `json:"id"`
+	Type        GatherType        `json:"type"`
+	Status      string            `json:"status"` // running, complete, failed
+	StartedAt   time.Time         `json:"startedAt"`
+	Error       string            `json:"error,omitempty"`
+	Warning     string            `json:"warning,omitempty"`
+	FilePath    string            `json:"-"`
+	FileName    string            `json:"fileName,omitempty"`
+	Anonymize   bool              `json:"anonymize"`
+	AnonOpts    AnonOptions       `json:"anonOpts,omitempty"`
+	Since       string            `json:"since,omitempty"`
+	LogOutput   string            `json:"logOutput,omitempty"`
+	Step        int               `json:"step"`
+	TotalSteps  int               `json:"totalSteps"`
+	StepLabel   string            `json:"stepLabel,omitempty"`
+	CustomOpts  *CustomGatherOpts `json:"-"`
 }
 
 type DiagJob struct {
@@ -115,34 +132,111 @@ type ImageConfig struct {
 	LVMSMustGather         string
 }
 
+// Collector is the interface for native Go collection.
+type Collector interface {
+	Run(ctx context.Context, opts CollectorRunOpts) error
+	RunEtcdBackup(ctx context.Context, destDir string, logFn func(string), stepFn func(int, int, string)) error
+}
+
+// CollectorRunOpts configures a native collection run.
+// Mirrors collector.RunOpts to avoid circular imports.
+type CollectorRunOpts struct {
+	GatherType  string
+	Detected    map[string]bool
+	DestDir     string
+	Since       string
+	SkipDefault bool // skip the default definition (for multi-select addon types)
+	OnStep      func(step, total int, label string)
+	OnLog       func(msg string)
+
+	// Custom gather options
+	CustomNamespaces    []string
+	CustomResourceTypes []string
+	CustomIncludeLogs   bool
+}
+
 type Manager struct {
 	workDir       string
 	images        ImageConfig
 	clusterDomain string
+	clusterName   string
 	detected      map[GatherType]bool
 	mu            sync.Mutex
 	jobs          map[string]*Job
 	cancels       map[string]context.CancelFunc
 	diagMu        sync.Mutex
 	diagJobs      map[string]*DiagJob
+	collector    Collector
+	nativeGather bool
+	k8sClient    *k8s.Client
 }
 
-func NewManager(workDir string, images ImageConfig) (*Manager, error) {
+func NewManager(workDir string, images ImageConfig, collector Collector, nativeGather bool, k8sClient *k8s.Client) (*Manager, error) {
 	if err := os.MkdirAll(workDir, 0700); err != nil {
 		return nil, err
 	}
-	return &Manager{
-		workDir:  workDir,
-		images:   images,
-		detected: make(map[GatherType]bool),
-		jobs:     make(map[string]*Job),
-		cancels:  make(map[string]context.CancelFunc),
-		diagJobs: make(map[string]*DiagJob),
-	}, nil
+	mgr := &Manager{
+		workDir:      workDir,
+		images:       images,
+		detected:     make(map[GatherType]bool),
+		jobs:         make(map[string]*Job),
+		cancels:      make(map[string]context.CancelFunc),
+		diagJobs:     make(map[string]*DiagJob),
+		collector:    collector,
+		nativeGather: nativeGather,
+		k8sClient:    k8sClient,
+	}
+	go mgr.cleanupLoop()
+	return mgr, nil
+}
+
+const jobRetention = 24 * time.Hour
+
+func (m *Manager) cleanupLoop() {
+	ticker := time.NewTicker(30 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		m.cleanupOldJobs()
+	}
+}
+
+func (m *Manager) cleanupOldJobs() {
+	cutoff := time.Now().Add(-jobRetention)
+
+	m.mu.Lock()
+	var toDelete []string
+	for id, j := range m.jobs {
+		if j.Status != "running" && j.StartedAt.Before(cutoff) {
+			toDelete = append(toDelete, id)
+			if j.FilePath != "" {
+				os.Remove(j.FilePath)
+			}
+		}
+	}
+	for _, id := range toDelete {
+		delete(m.jobs, id)
+	}
+	m.mu.Unlock()
+
+	m.diagMu.Lock()
+	var diagDelete []string
+	for id, dj := range m.diagJobs {
+		if dj.Status != "running" && dj.StartedAt.Before(cutoff) {
+			diagDelete = append(diagDelete, id)
+		}
+	}
+	for _, id := range diagDelete {
+		delete(m.diagJobs, id)
+	}
+	m.diagMu.Unlock()
 }
 
 func (m *Manager) SetClusterDomain(domain string) {
 	m.clusterDomain = domain
+}
+
+func (m *Manager) SetClusterName(name string) {
+	m.clusterName = name
 }
 
 // SetDetected marks a gather type as available on this cluster.
@@ -313,6 +407,20 @@ func sanitizeID(id string) string {
 	return id
 }
 
+const maxConcurrentJobs = 5
+
+func (m *Manager) ActiveJobCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	count := 0
+	for _, j := range m.jobs {
+		if j.Status == "running" {
+			count++
+		}
+	}
+	return count
+}
+
 func (m *Manager) StartGather(gatherType GatherType, anonOpts AnonOptions, since string, opts GatherOpts) string {
 	if since != "" && !validSince.MatchString(since) {
 		since = ""
@@ -362,6 +470,10 @@ func (m *Manager) StartGather(gatherType GatherType, anonOpts AnonOptions, since
 		prefix = "audit"
 	case GatherAll:
 		prefix = "all"
+	case GatherMulti:
+		prefix = "multi"
+	case GatherCustom:
+		prefix = "custom"
 	case GatherEtcdBackup:
 		prefix = "etcd-backup"
 	default:
@@ -369,13 +481,14 @@ func (m *Manager) StartGather(gatherType GatherType, anonOpts AnonOptions, since
 	}
 	id := fmt.Sprintf("%s-%d", prefix, time.Now().UnixMilli())
 	job := &Job{
-		ID:        id,
-		Type:      gatherType,
-		Status:    "running",
-		StartedAt: time.Now(),
-		Anonymize: anonOpts.Any(),
-		AnonOpts:  anonOpts,
-		Since:     since,
+		ID:         id,
+		Type:       gatherType,
+		Status:     "running",
+		StartedAt:  time.Now(),
+		Anonymize:  anonOpts.Any(),
+		AnonOpts:   anonOpts,
+		Since:      since,
+		CustomOpts: opts.Custom,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), gatherTimeout)
@@ -485,6 +598,11 @@ func (m *Manager) runGather(ctx context.Context, job *Job, opts GatherOpts) {
 		delete(m.cancels, job.ID)
 		m.mu.Unlock()
 	}()
+
+	if m.nativeGather && m.collector != nil {
+		m.runNativeGather(ctx, job, opts)
+		return
+	}
 
 	if job.Type == GatherEtcdBackup {
 		m.runEtcdBackup(ctx, job)
@@ -599,6 +717,81 @@ func (m *Manager) runGather(ctx context.Context, job *Job, opts GatherOpts) {
 		steps = append(steps, gatherStep{"LVMS must-gather", imageArgs(destDir, m.images.LVMSMustGather)})
 	case GatherAudit:
 		steps = append(steps, gatherStep{"Audit logs", mkAuditArgs(destDir)})
+	case GatherCustom:
+		if opts.Custom != nil {
+			for _, ns := range opts.Custom.Namespaces {
+				args := []string{"adm", "inspect", "ns/" + ns, "--dest-dir=" + destDir}
+				if sinceArg != "" {
+					args = append(args, sinceArg)
+				}
+				steps = append(steps, gatherStep{fmt.Sprintf("Inspect namespace %s", ns), args})
+			}
+		}
+	case GatherMulti:
+		selected := map[GatherType]bool{}
+		for _, t := range opts.SelectedTypes {
+			selected[t] = true
+		}
+		if selected[GatherDefault] {
+			steps = append(steps, gatherStep{"Default must-gather", mkDefaultArgs(stepDestDir("default"))})
+		}
+		if selected[GatherVirtualization] && m.images.CNVMustGather != "" {
+			steps = append(steps, gatherStep{"Virtualization must-gather", imageArgs(stepDestDir("virtualization"), m.images.CNVMustGather)})
+		}
+		if selected[GatherODF] && m.images.ODFMustGather != "" {
+			steps = append(steps, gatherStep{"ODF must-gather", imageArgs(stepDestDir("odf"), m.images.ODFMustGather)})
+		}
+		if selected[GatherACM] && m.images.ACMMustGather != "" {
+			steps = append(steps, gatherStep{"ACM must-gather", imageArgs(stepDestDir("acm"), m.images.ACMMustGather)})
+		}
+		if selected[GatherLogging] && m.images.LoggingMustGather != "" {
+			steps = append(steps, gatherStep{"Logging must-gather", imageArgs(stepDestDir("logging"), m.images.LoggingMustGather)})
+		}
+		if selected[GatherServiceMesh] && m.images.ServiceMeshMustGather != "" {
+			steps = append(steps, gatherStep{"Service Mesh must-gather", imageArgs(stepDestDir("service-mesh"), m.images.ServiceMeshMustGather)})
+		}
+		if selected[GatherCompliance] && m.images.ComplianceMustGather != "" {
+			steps = append(steps, gatherStep{"Compliance must-gather", imageArgs(stepDestDir("compliance"), m.images.ComplianceMustGather)})
+		}
+		if selected[GatherMTC] && m.images.MTCMustGather != "" {
+			steps = append(steps, gatherStep{"MTC must-gather", imageArgs(stepDestDir("mtc"), m.images.MTCMustGather)})
+		}
+		if selected[GatherGitOps] && m.images.GitOpsMustGather != "" {
+			steps = append(steps, gatherStep{"GitOps must-gather", imageArgs(stepDestDir("gitops"), m.images.GitOpsMustGather)})
+		}
+		if selected[GatherServerless] && m.images.ServerlessMustGather != "" {
+			steps = append(steps, gatherStep{"Serverless must-gather", imageArgs(stepDestDir("serverless"), m.images.ServerlessMustGather)})
+		}
+		if selected[GatherMCE] && m.images.MCEMustGather != "" {
+			steps = append(steps, gatherStep{"MCE must-gather", imageArgs(stepDestDir("mce"), m.images.MCEMustGather)})
+		}
+		if selected[GatherNetObserv] && m.images.NetObservMustGather != "" {
+			steps = append(steps, gatherStep{"Network Observability must-gather", imageArgs(stepDestDir("netobserv"), m.images.NetObservMustGather)})
+		}
+		if selected[GatherLocalStorage] && m.images.LocalStorageMustGather != "" {
+			steps = append(steps, gatherStep{"Local Storage must-gather", imageArgs(stepDestDir("local-storage"), m.images.LocalStorageMustGather)})
+		}
+		if selected[GatherSandboxed] && m.images.SandboxedMustGather != "" {
+			steps = append(steps, gatherStep{"Sandboxed Containers must-gather", imageArgs(stepDestDir("sandboxed"), m.images.SandboxedMustGather)})
+		}
+		if selected[GatherNHC] && m.images.NHCMustGather != "" {
+			steps = append(steps, gatherStep{"Node Health Check must-gather", imageArgs(stepDestDir("nhc"), m.images.NHCMustGather)})
+		}
+		if selected[GatherNUMA] && m.images.NUMAMustGather != "" {
+			steps = append(steps, gatherStep{"NUMA Resources must-gather", imageArgs(stepDestDir("numa"), m.images.NUMAMustGather)})
+		}
+		if selected[GatherPTP] && m.images.PTPMustGather != "" {
+			steps = append(steps, gatherStep{"PTP must-gather", imageArgs(stepDestDir("ptp"), m.images.PTPMustGather)})
+		}
+		if selected[GatherSecretsStore] && m.images.SecretsStoreMustGather != "" {
+			steps = append(steps, gatherStep{"Secrets Store CSI must-gather", imageArgs(stepDestDir("secrets-store"), m.images.SecretsStoreMustGather)})
+		}
+		if selected[GatherLVMS] && m.images.LVMSMustGather != "" {
+			steps = append(steps, gatherStep{"LVMS must-gather", imageArgs(stepDestDir("lvms"), m.images.LVMSMustGather)})
+		}
+		if selected[GatherAudit] {
+			steps = append(steps, gatherStep{"Audit logs", mkAuditArgs(stepDestDir("audit"))})
+		}
 	case GatherAll:
 		steps = append(steps, gatherStep{"Default must-gather", mkDefaultArgs(stepDestDir("default"))})
 		if m.detected[GatherVirtualization] && m.images.CNVMustGather != "" {
@@ -675,7 +868,7 @@ func (m *Manager) runGather(ctx context.Context, job *Job, opts GatherOpts) {
 				m.setError(job, "Stopped by user")
 				return
 			}
-			if job.Type == GatherAll {
+			if job.Type == GatherAll || job.Type == GatherMulti {
 				m.appendLog(job, fmt.Sprintf("Warning: %s failed (continuing): %v", s.label, err))
 				m.appendLog(job, fmt.Sprintf("=== %s failed ===", s.label))
 				continue
@@ -691,11 +884,18 @@ func (m *Manager) runGather(ctx context.Context, job *Job, opts GatherOpts) {
 		stepNum := len(steps) + 1
 		m.setStep(job, stepNum, totalSteps, "Anonymizing data")
 		m.appendLog(job, fmt.Sprintf("=== Step %d/%d: Anonymizing data ===", stepNum, totalSteps))
-		m.appendLog(job, "Obfuscating IP addresses and MAC addresses...")
-		if err := m.fastAnonymize(destDir, job.AnonOpts); err != nil {
+
+		nodeMapping := m.buildAndLogNodeMapping(job)
+
+		m.appendLog(job, "Obfuscating data...")
+		redacted, err := FastAnonymize(destDir, m.workDir, m.clusterDomain, job.AnonOpts, nodeMapping)
+		if err != nil {
 			m.appendLog(job, fmt.Sprintf("Warning: anonymization error: %v", err))
 		} else {
 			m.appendLog(job, "Obfuscation complete.")
+			if redacted > 0 {
+				m.appendLog(job, fmt.Sprintf("Redacted %d secret value(s).", redacted))
+			}
 		}
 		m.appendLog(job, "=== Anonymizing data complete ===")
 	}
@@ -739,6 +939,208 @@ func (m *Manager) runGather(ctx context.Context, job *Job, opts GatherOpts) {
 	m.mu.Unlock()
 }
 
+func (m *Manager) runNativeGather(ctx context.Context, job *Job, opts GatherOpts) {
+	if job.Type == GatherEtcdBackup {
+		m.runNativeEtcdBackup(ctx, job)
+		return
+	}
+
+	destDir := filepath.Join(m.workDir, job.ID)
+	if err := os.MkdirAll(destDir, 0700); err != nil {
+		m.setError(job, fmt.Sprintf("create dir: %v", err))
+		return
+	}
+
+	// Convert detected map keys to strings for the collector
+	detected := make(map[string]bool)
+	m.mu.Lock()
+	for k, v := range m.detected {
+		detected[string(k)] = v
+	}
+	m.mu.Unlock()
+
+	// For multi-select, run the collector once per selected type
+	gatherTypes := []string{string(job.Type)}
+	if job.Type == GatherMulti && len(opts.SelectedTypes) > 0 {
+		gatherTypes = make([]string, len(opts.SelectedTypes))
+		for i, t := range opts.SelectedTypes {
+			gatherTypes[i] = string(t)
+		}
+	}
+
+	for i, gt := range gatherTypes {
+		if ctx.Err() != nil {
+			m.setError(job, "Stopped by user")
+			return
+		}
+
+		if strings.ContainsAny(gt, "/\\") || gt == ".." || gt == "." {
+			m.appendLog(job, fmt.Sprintf("Skipping invalid gather type: %s", gt))
+			continue
+		}
+
+		typeDestDir := destDir
+		if len(gatherTypes) > 1 {
+			typeDestDir = filepath.Join(destDir, gt)
+			os.MkdirAll(typeDestDir, 0700)
+			m.appendLog(job, fmt.Sprintf("=== Gather %d/%d: %s ===", i+1, len(gatherTypes), gt))
+		}
+
+		// In multi-select, skip the default definition for non-default types
+		// since default is already collected as its own type
+		skipDefault := len(gatherTypes) > 1 && gt != "default"
+
+		runOpts := CollectorRunOpts{
+			GatherType:  gt,
+			Detected:    detected,
+			DestDir:     typeDestDir,
+			Since:       job.Since,
+			SkipDefault: skipDefault,
+			OnStep:      func(step, total int, label string) { m.setStep(job, step, total+1, label) },
+			OnLog:       func(msg string) { m.appendLog(job, msg) },
+		}
+		if job.Type == GatherCustom && job.CustomOpts != nil {
+			runOpts.CustomNamespaces = job.CustomOpts.Namespaces
+			runOpts.CustomResourceTypes = job.CustomOpts.ResourceTypes
+			runOpts.CustomIncludeLogs = job.CustomOpts.IncludeLogs
+		}
+		err := m.collector.Run(ctx, runOpts)
+		if err != nil {
+			if ctx.Err() != nil {
+				m.setError(job, "Stopped by user")
+				return
+			}
+			if len(gatherTypes) > 1 {
+				// Multi: continue on failure like GatherAll
+				m.appendLog(job, fmt.Sprintf("Warning: %s collection failed (continuing): %v", gt, err))
+				continue
+			}
+			m.setError(job, fmt.Sprintf("collection failed: %v", err))
+			return
+		}
+	}
+
+	// Anonymization
+	if job.Anonymize {
+		m.appendLog(job, "=== Anonymizing data ===")
+
+		nodeMapping := m.buildAndLogNodeMapping(job)
+
+		redacted, err := FastAnonymize(destDir, m.workDir, m.clusterDomain, job.AnonOpts, nodeMapping)
+		if err != nil {
+			m.appendLog(job, fmt.Sprintf("Warning: anonymization error: %v", err))
+		} else {
+			m.appendLog(job, "Obfuscation complete.")
+			if redacted > 0 {
+				m.appendLog(job, fmt.Sprintf("Redacted %d secret value(s).", redacted))
+			}
+		}
+	}
+
+	// Create archive with standard must-gather directory structure
+	tarName := job.ID
+	if job.Anonymize {
+		tarName += "-anonymized"
+	}
+	m.appendLog(job, "=== Creating tar.gz archive ===")
+
+	// Restructure: rename destDir into must-gather.local.XXX/{clusterName}/
+	innerName := m.clusterName
+	if innerName == "" {
+		innerName = "cluster"
+	}
+	wrapperBase := "must-gather.local." + job.ID
+	wrapperDir := filepath.Join(m.workDir, wrapperBase)
+	innerDir := filepath.Join(wrapperDir, innerName)
+	os.MkdirAll(wrapperDir, 0700)
+	os.Rename(destDir, innerDir)
+
+	tarFile := filepath.Join(m.workDir, tarName+".tar.gz")
+	if err := m.runCommand(ctx, job, "tar", "-czf", tarFile, "-C", m.workDir, wrapperBase); err != nil {
+		m.setError(job, fmt.Sprintf("tar failed: %v", err))
+		// Restore destDir on failure
+		os.Rename(innerDir, destDir)
+		os.Remove(wrapperDir)
+		return
+	}
+	os.RemoveAll(wrapperDir)
+	m.appendLog(job, "=== Creating tar.gz archive complete ===")
+
+	m.mu.Lock()
+	logSnapshot := job.LogOutput
+	m.mu.Unlock()
+
+	warning := gatherHadErrors(logSnapshot)
+
+	m.mu.Lock()
+	job.Status = "complete"
+	job.FilePath = tarFile
+	job.FileName = tarName + ".tar.gz"
+	job.Warning = warning
+	if warning != "" {
+		job.StepLabel = "Completed with errors"
+		job.LogOutput += "WARNING: " + warning + "\n"
+		job.LogOutput += "=== Done! Archive ready for download (errors detected during gather). ===\n"
+	} else {
+		job.StepLabel = "Complete"
+		job.LogOutput += "=== Done! Archive ready for download. ===\n"
+	}
+	m.mu.Unlock()
+}
+
+func (m *Manager) runNativeEtcdBackup(ctx context.Context, job *Job) {
+	destDir := filepath.Join(m.workDir, job.ID)
+	if err := os.MkdirAll(destDir, 0700); err != nil {
+		m.setError(job, fmt.Sprintf("create dir: %v", err))
+		return
+	}
+
+	err := m.collector.RunEtcdBackup(ctx, destDir,
+		func(msg string) { m.appendLog(job, msg) },
+		func(step, total int, label string) { m.setStep(job, step, total, label) },
+	)
+	if err != nil {
+		if ctx.Err() != nil {
+			m.setError(job, "Stopped by user")
+			return
+		}
+		m.setError(job, fmt.Sprintf("etcd backup failed: %v", err))
+		return
+	}
+
+	safeID := sanitizeID(job.ID)
+	tarFile := filepath.Join(m.workDir, safeID+".tar.gz")
+
+	// Check if the backup was written as a tar directly
+	backupTar := filepath.Join(destDir, "etcd-backup.tar.gz")
+	if info, err := os.Stat(backupTar); err == nil && info.Size() > 0 {
+		// Move the tar to the expected location
+		if err := os.Rename(backupTar, tarFile); err != nil {
+			m.setError(job, fmt.Sprintf("move backup: %v", err))
+			return
+		}
+	} else {
+		m.setError(job, "backup archive is empty or not created")
+		return
+	}
+
+	info, err := os.Stat(tarFile)
+	if err != nil || info.Size() == 0 {
+		m.setError(job, "backup archive is empty or not created")
+		return
+	}
+
+	m.appendLog(job, fmt.Sprintf("Backup archive created: %s (%.1f MB)", filepath.Base(tarFile), float64(info.Size())/(1024*1024)))
+
+	m.mu.Lock()
+	job.Status = "complete"
+	job.FilePath = tarFile
+	job.FileName = "etcd-backup-" + job.ID + ".tar.gz"
+	job.StepLabel = "Complete"
+	job.LogOutput += "=== Done! Etcd backup ready for download. ===\n"
+	m.mu.Unlock()
+}
+
 func (m *Manager) runEtcdBackup(ctx context.Context, job *Job) {
 	destDir := filepath.Join(m.workDir, job.ID)
 	if err := os.MkdirAll(destDir, 0700); err != nil {
@@ -759,6 +1161,10 @@ func (m *Manager) runEtcdBackup(ctx context.Context, job *Job) {
 	masterNode := strings.TrimSpace(string(out))
 	if masterNode == "" {
 		m.setError(job, "no master node found")
+		return
+	}
+	if ok, _ := regexp.MatchString(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`, masterNode); !ok {
+		m.setError(job, "invalid master node name")
 		return
 	}
 	m.appendLog(job, fmt.Sprintf("Using master node: %s", masterNode))
@@ -848,11 +1254,104 @@ func (m *Manager) runEtcdBackup(ctx context.Context, job *Job) {
 	m.mu.Unlock()
 }
 
-func (m *Manager) fastAnonymize(dir string, opts AnonOptions) error {
-	dir = filepath.Clean(dir)
-	if !strings.HasPrefix(dir, m.workDir) {
-		return fmt.Errorf("directory outside work dir")
+// BuildNodeMapping fetches the cluster's node list and returns a map of
+// real hostname -> role-based pseudonym (e.g. "master-1", "worker-2").
+func BuildNodeMapping(client *k8s.Client) (map[string]string, error) {
+	if client == nil {
+		return nil, nil
 	}
+	data, err := client.Get("/api/v1/nodes")
+	if err != nil {
+		return nil, fmt.Errorf("list nodes: %w", err)
+	}
+
+	type nodeInfo struct {
+		name string
+		role string
+	}
+
+	roleFor := func(labels map[string]interface{}) string {
+		for _, r := range []string{"master", "control-plane"} {
+			if _, ok := labels["node-role.kubernetes.io/"+r]; ok {
+				return "master"
+			}
+		}
+		if _, ok := labels["node-role.kubernetes.io/infra"]; ok {
+			return "infra"
+		}
+		if _, ok := labels["node-role.kubernetes.io/worker"]; ok {
+			return "worker"
+		}
+		var custom []string
+		for k := range labels {
+			if strings.HasPrefix(k, "node-role.kubernetes.io/") {
+				role := strings.TrimPrefix(k, "node-role.kubernetes.io/")
+				if role != "" {
+					custom = append(custom, role)
+				}
+			}
+		}
+		if len(custom) > 0 {
+			sort.Strings(custom)
+			return custom[0]
+		}
+		return "worker"
+	}
+
+	safeHostname := regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
+
+	var nodes []nodeInfo
+	for _, item := range k8s.JsonArray(data, "items") {
+		m, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		name := k8s.JsonPath(m, "metadata", "name")
+		if name == "" || !safeHostname.MatchString(name) {
+			continue
+		}
+		labels := k8s.JsonMap(m, "metadata", "labels")
+		role := "worker"
+		if labels != nil {
+			role = roleFor(labels)
+		}
+		nodes = append(nodes, nodeInfo{name: name, role: role})
+	}
+
+	roleNodes := map[string][]string{}
+	for _, n := range nodes {
+		roleNodes[n.role] = append(roleNodes[n.role], n.name)
+	}
+	for role := range roleNodes {
+		sort.Strings(roleNodes[role])
+	}
+
+	mapping := make(map[string]string, len(nodes))
+	for _, n := range nodes {
+		sorted := roleNodes[n.role]
+		idx := sort.SearchStrings(sorted, n.name)
+		mapping[n.name] = fmt.Sprintf("%s-%d", n.role, idx+1)
+	}
+
+	return mapping, nil
+}
+
+// FastAnonymize applies regex-based obfuscation to all text files in a directory.
+// It replaces IPs, MACs, domain names, and service DNS based on the provided options.
+// nodeMapping provides optional hostname-to-pseudonym replacements applied first.
+// Returns the number of secret values redacted (0 if secrets option not enabled).
+func FastAnonymize(dir, workDir, clusterDomain string, opts AnonOptions, nodeMapping map[string]string) (int, error) {
+	dir = filepath.Clean(dir)
+	if !strings.HasPrefix(dir, workDir) {
+		return 0, fmt.Errorf("directory outside work dir")
+	}
+
+	if len(nodeMapping) > 0 {
+		if err := anonymizeNodeNames(dir, nodeMapping); err != nil {
+			return 0, fmt.Errorf("node name anonymization: %w", err)
+		}
+	}
+
 	findCmd := exec.Command("find", dir, "-type", "f",
 		"(", "-name", "*.log", "-o", "-name", "*.yaml", "-o", "-name", "*.json", "-o", "-name", "*.txt", ")",
 		"-print0")
@@ -864,7 +1363,7 @@ func (m *Manager) fastAnonymize(dir string, opts AnonOptions) error {
 	if opts.MACs {
 		sedArgs = append(sedArgs, "-e", `s/\b([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}\b/xx:xx:xx:xx:xx:xx/g`)
 	}
-	if opts.Domains && m.clusterDomain != "" {
+	if opts.Domains && clusterDomain != "" {
 		domainMask := func(domain string) string {
 			parts := strings.Split(domain, ".")
 			masked := make([]string, len(parts))
@@ -876,13 +1375,10 @@ func (m *Manager) fastAnonymize(dir string, opts AnonOptions) error {
 		escSed := func(s string) string {
 			return strings.ReplaceAll(regexp.QuoteMeta(s), `/`, `\/`)
 		}
-		// Full apps domain (e.g. apps.cluster-x.domain.example.com)
-		sedArgs = append(sedArgs, "-e", `s/`+escSed(m.clusterDomain)+`/`+domainMask(m.clusterDomain)+`/g`)
-		if strings.HasPrefix(m.clusterDomain, "apps.") {
-			// Cluster FQDN (e.g. cluster-x.domain.example.com)
-			clusterFQDN := m.clusterDomain[5:]
+		sedArgs = append(sedArgs, "-e", `s/`+escSed(clusterDomain)+`/`+domainMask(clusterDomain)+`/g`)
+		if strings.HasPrefix(clusterDomain, "apps.") {
+			clusterFQDN := clusterDomain[5:]
 			sedArgs = append(sedArgs, "-e", `s/`+escSed(clusterFQDN)+`/`+domainMask(clusterFQDN)+`/g`)
-			// Base domain (e.g. domain.example.com) — strip cluster name segment
 			if idx := strings.Index(clusterFQDN, "."); idx > 0 {
 				baseDomain := clusterFQDN[idx+1:]
 				sedArgs = append(sedArgs, "-e", `s/`+escSed(baseDomain)+`/`+domainMask(baseDomain)+`/g`)
@@ -896,12 +1392,168 @@ func (m *Manager) fastAnonymize(dir string, opts AnonOptions) error {
 	sedCmd := exec.Command("xargs", sedArgs...)
 	sedCmd.Stdin, _ = findCmd.StdoutPipe()
 	if err := findCmd.Start(); err != nil {
+		return 0, err
+	}
+	if err := sedCmd.Run(); err != nil {
+		return 0, err
+	}
+	if err := findCmd.Wait(); err != nil {
+		return 0, err
+	}
+
+	if opts.Secrets {
+		count, err := redactBase64Values(dir)
+		if err != nil {
+			return 0, fmt.Errorf("secret redaction: %w", err)
+		}
+		return count, nil
+	}
+
+	return 0, nil
+}
+
+// redactBase64Values walks YAML files and replaces base64-encoded values
+// in data/stringData maps with a redaction marker. Returns the number of
+// values redacted.
+func redactBase64Values(dir string) (int, error) {
+	total := 0
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return err
+		}
+		if !strings.HasSuffix(path, ".yaml") && !strings.HasSuffix(path, ".json") {
+			return nil
+		}
+
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+
+		var obj map[interface{}]interface{}
+		if err := yaml.Unmarshal(raw, &obj); err != nil {
+			return nil
+		}
+
+		changed := 0
+		for _, key := range []string{"data", "stringData"} {
+			dm, ok := obj[key].(map[interface{}]interface{})
+			if !ok {
+				continue
+			}
+			for k, v := range dm {
+				s, ok := v.(string)
+				if !ok || len(s) == 0 {
+					continue
+				}
+				if isBase64Encoded(s) {
+					dm[k] = "<REDACTED>"
+					changed++
+				}
+			}
+		}
+
+		if changed > 0 {
+			total += changed
+			out, err := yaml.Marshal(obj)
+			if err != nil {
+				return nil
+			}
+			return os.WriteFile(path, out, info.Mode())
+		}
+		return nil
+	})
+	return total, err
+}
+
+func isBase64Encoded(s string) bool {
+	if len(s) < 4 {
+		return false
+	}
+	decoded, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		return false
+	}
+	_ = decoded
+	return true
+}
+
+func anonymizeNodeNames(dir string, mapping map[string]string) error {
+	// Sort hostnames longest-first to avoid partial replacements
+	hostnames := make([]string, 0, len(mapping))
+	for h := range mapping {
+		hostnames = append(hostnames, h)
+	}
+	sort.Slice(hostnames, func(i, j int) bool {
+		return len(hostnames[i]) > len(hostnames[j])
+	})
+
+	// Rename directories and files containing node hostnames (depth-first)
+	var allPaths []string
+	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		allPaths = append(allPaths, path)
+		return nil
+	})
+	// Process deepest paths first so parent renames don't invalidate child paths
+	sort.Slice(allPaths, func(i, j int) bool {
+		return len(allPaths[i]) > len(allPaths[j])
+	})
+	for _, p := range allPaths {
+		base := filepath.Base(p)
+		newBase := base
+		for _, h := range hostnames {
+			newBase = strings.ReplaceAll(newBase, h, mapping[h])
+		}
+		if newBase != base {
+			newPath := filepath.Join(filepath.Dir(p), newBase)
+			os.Rename(p, newPath)
+		}
+	}
+
+	// Build sed expressions for file contents
+	escSed := func(s string) string {
+		return strings.ReplaceAll(regexp.QuoteMeta(s), `/`, `\/`)
+	}
+	nodeSedArgs := []string{"-0", "-P", "4", "-r", "sed", "-i"}
+	for _, h := range hostnames {
+		nodeSedArgs = append(nodeSedArgs, "-e", `s/`+escSed(h)+`/`+mapping[h]+`/g`)
+	}
+
+	findCmd := exec.Command("find", dir, "-type", "f",
+		"(", "-name", "*.log", "-o", "-name", "*.yaml", "-o", "-name", "*.json", "-o", "-name", "*.txt", ")",
+		"-print0")
+	sedCmd := exec.Command("xargs", nodeSedArgs...)
+	sedCmd.Stdin, _ = findCmd.StdoutPipe()
+	if err := findCmd.Start(); err != nil {
 		return err
 	}
 	if err := sedCmd.Run(); err != nil {
 		return err
 	}
 	return findCmd.Wait()
+}
+
+func (m *Manager) buildAndLogNodeMapping(job *Job) map[string]string {
+	nodeMapping, err := BuildNodeMapping(m.k8sClient)
+	if err != nil {
+		m.appendLog(job, fmt.Sprintf("Warning: could not build node mapping: %v", err))
+		return nil
+	}
+	if len(nodeMapping) > 0 {
+		m.appendLog(job, fmt.Sprintf("Node name mapping (%d nodes):", len(nodeMapping)))
+		names := make([]string, 0, len(nodeMapping))
+		for n := range nodeMapping {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		for _, n := range names {
+			m.appendLog(job, fmt.Sprintf("  %s -> %s", n, nodeMapping[n]))
+		}
+	}
+	return nodeMapping
 }
 
 func (m *Manager) setError(job *Job, msg string) {
@@ -941,7 +1593,7 @@ var AllowedDiagObjects = map[string]bool{
 	"secrets": true, "configmaps": true, "events": true, "events.events.k8s.io": true,
 	"pods": true, "deployments": true, "replicasets": true, "statefulsets": true,
 	"daemonsets": true, "jobs": true, "cronjobs": true,
-	"services": true, "endpoints": true, "ingresses": true, "routes": true,
+	"services": true, "endpointslices": true, "ingresses": true, "routes": true,
 	"persistentvolumeclaims": true, "persistentvolumes": true,
 	"serviceaccounts": true, "roles": true, "rolebindings": true,
 	"clusterroles": true, "clusterrolebindings": true,
