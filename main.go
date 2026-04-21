@@ -140,8 +140,8 @@ func main() {
 	go func() {
 		metricsMux := http.NewServeMux()
 		metricsMux.Handle("/metrics", metrics.Handler())
-		log.Printf("Metrics server listening on :8081")
-		if err := http.ListenAndServe(":8081", metricsMux); err != nil {
+		log.Printf("Metrics server listening on 127.0.0.1:8081")
+		if err := http.ListenAndServe("127.0.0.1:8081", metricsMux); err != nil {
 			log.Printf("Metrics server error: %v", err)
 		}
 	}()

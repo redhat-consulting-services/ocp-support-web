@@ -48,7 +48,7 @@ const saTokenPath = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 
 func Load() (*AppConfig, error) {
 	cfg := &AppConfig{
-		ListenAddr:    envOr("LISTEN_ADDR", ":8080"),
+		ListenAddr:    envOr("LISTEN_ADDR", "127.0.0.1:8080"),
 		MustGatherDir: envOr("MUST_GATHER_DIR", "/tmp/ocp-support-web/gather"),
 		NativeGather:  os.Getenv("NATIVE_GATHER") != "false",
 		AgentImage:    os.Getenv("AGENT_IMAGE"), // auto-detected from pod spec if empty
