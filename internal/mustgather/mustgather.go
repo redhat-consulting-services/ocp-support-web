@@ -976,7 +976,8 @@ func (m *Manager) runNativeGather(ctx context.Context, job *Job, opts GatherOpts
 
 		typeDestDir := destDir
 		if len(gatherTypes) > 1 {
-			typeDestDir = filepath.Join(destDir, filepath.Clean(gt))
+			cleanGT := filepath.Base(gt)
+			typeDestDir = filepath.Join(destDir, cleanGT)
 			os.MkdirAll(typeDestDir, 0700)
 			m.appendLog(job, fmt.Sprintf("=== Gather %d/%d: %s ===", i+1, len(gatherTypes), gt))
 		}

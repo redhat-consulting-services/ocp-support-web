@@ -8,29 +8,22 @@ import (
 	"strings"
 )
 
-// safePath validates that the resolved path stays within baseDir.
-func safePath(baseDir, path string) (string, error) {
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return "", fmt.Errorf("resolve path: %w", err)
-	}
-	base, err := filepath.Abs(baseDir)
-	if err != nil {
-		return "", fmt.Errorf("resolve base: %w", err)
-	}
-	if !strings.HasPrefix(abs, base+string(filepath.Separator)) && abs != base {
-		return "", fmt.Errorf("path %q escapes base directory", path)
-	}
-	return abs, nil
-}
-
 // writeFile creates parent directories and writes data to the given path.
 // The path must resolve within baseDir.
 func writeFile(baseDir, path string, data []byte) error {
-	safe, err := safePath(baseDir, path)
+	base, err := filepath.Abs(baseDir)
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve base: %w", err)
 	}
+	target, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("resolve path: %w", err)
+	}
+	rel, err := filepath.Rel(base, target)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("path %q escapes base directory", path)
+	}
+	safe := filepath.Join(base, rel)
 	if err := os.MkdirAll(filepath.Dir(safe), 0700); err != nil {
 		return err
 	}
@@ -40,10 +33,19 @@ func writeFile(baseDir, path string, data []byte) error {
 // writeStream creates parent directories and streams data to the given path.
 // The path must resolve within baseDir.
 func writeStream(baseDir, path string, r io.Reader) error {
-	safe, err := safePath(baseDir, path)
+	base, err := filepath.Abs(baseDir)
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve base: %w", err)
 	}
+	target, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("resolve path: %w", err)
+	}
+	rel, err := filepath.Rel(base, target)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("path %q escapes base directory", path)
+	}
+	safe := filepath.Join(base, rel)
 	if err := os.MkdirAll(filepath.Dir(safe), 0700); err != nil {
 		return err
 	}
