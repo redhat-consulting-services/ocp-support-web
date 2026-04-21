@@ -188,6 +188,7 @@ func (h *Handler) handleStartGather(w http.ResponseWriter, r *http.Request) {
 			MACs     bool `json:"macs"`
 			Domains  bool `json:"domains"`
 			Services bool `json:"services"`
+			Secrets  bool `json:"secrets"`
 		} `json:"anonOpts"`
 		Since         string   `json:"since"`
 		NodeName      string   `json:"nodeName"`
@@ -302,6 +303,7 @@ func (h *Handler) handleStartGather(w http.ResponseWriter, r *http.Request) {
 		MACs:     req.AnonOpts.MACs,
 		Domains:  req.AnonOpts.Domains,
 		Services: req.AnonOpts.Services,
+		Secrets:  req.AnonOpts.Secrets,
 	}
 	if req.Anonymize && !anonOpts.Any() {
 		anonOpts = mustgather.AnonOptions{IPs: true, MACs: true, Domains: true, Services: true}

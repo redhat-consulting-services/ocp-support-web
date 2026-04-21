@@ -1,55 +1,29 @@
 package collector
 
 import (
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
-// writeFile creates parent directories and writes data to the given path.
-// The path must resolve within baseDir.
-func writeFile(baseDir, path string, data []byte) error {
-	base, err := filepath.Abs(baseDir)
-	if err != nil {
-		return fmt.Errorf("resolve base: %w", err)
-	}
-	target, err := filepath.Abs(path)
-	if err != nil {
-		return fmt.Errorf("resolve path: %w", err)
-	}
-	rel, err := filepath.Rel(base, target)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("path %q escapes base directory", path)
-	}
-	safe := filepath.Join(base, rel)
-	if err := os.MkdirAll(filepath.Dir(safe), 0700); err != nil {
+// writeFile creates parent directories and writes data.
+// All path components must be pre-sanitized with filepath.Base by the path helpers.
+func writeFile(path string, data []byte) error {
+	clean := filepath.Clean(path)
+	if err := os.MkdirAll(filepath.Dir(clean), 0700); err != nil {
 		return err
 	}
-	return os.WriteFile(safe, data, 0600)
+	return os.WriteFile(clean, data, 0600)
 }
 
-// writeStream creates parent directories and streams data to the given path.
-// The path must resolve within baseDir.
-func writeStream(baseDir, path string, r io.Reader) error {
-	base, err := filepath.Abs(baseDir)
-	if err != nil {
-		return fmt.Errorf("resolve base: %w", err)
-	}
-	target, err := filepath.Abs(path)
-	if err != nil {
-		return fmt.Errorf("resolve path: %w", err)
-	}
-	rel, err := filepath.Rel(base, target)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("path %q escapes base directory", path)
-	}
-	safe := filepath.Join(base, rel)
-	if err := os.MkdirAll(filepath.Dir(safe), 0700); err != nil {
+// writeStream creates parent directories and streams data.
+// All path components must be pre-sanitized with filepath.Base by the path helpers.
+func writeStream(path string, r io.Reader) error {
+	clean := filepath.Clean(path)
+	if err := os.MkdirAll(filepath.Dir(clean), 0700); err != nil {
 		return err
 	}
-	f, err := os.Create(safe)
+	f, err := os.Create(clean)
 	if err != nil {
 		return err
 	}

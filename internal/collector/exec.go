@@ -71,7 +71,7 @@ func (e *Engine) collectPodExecs(ctx context.Context, def GatherDefinition, dest
 			outputFile = spec.Name + ".txt"
 		}
 		filePath := execOutputPath(destDir, spec.Namespace, podName, outputFile)
-		if err := writeFile(destDir, filePath, stdout); err != nil {
+		if err := writeFile(filePath, stdout); err != nil {
 			errs = append(errs, fmt.Errorf("write exec output %s: %w", spec.Name, err))
 		}
 	}

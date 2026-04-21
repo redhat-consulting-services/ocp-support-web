@@ -53,7 +53,7 @@ func (e *Engine) Run(ctx context.Context, opts RunOpts) error {
 
 	// Write timestamp file
 	tsFile := filepath.Join(opts.DestDir, "timestamp")
-	_ = writeFile(opts.DestDir, tsFile, []byte(time.Now().UTC().Format(time.RFC3339)+"\n"))
+	_ = writeFile(tsFile, []byte(time.Now().UTC().Format(time.RFC3339)+"\n"))
 
 	var defs []GatherDefinition
 
@@ -265,7 +265,7 @@ func (e *Engine) RunEtcdBackup(ctx context.Context, destDir string, logFn func(s
 	if err := os.MkdirAll(destDir, 0700); err != nil {
 		return err
 	}
-	if err := writeFile(destDir, tarFile, tarData); err != nil {
+	if err := writeFile(tarFile, tarData); err != nil {
 		return fmt.Errorf("write backup: %w", err)
 	}
 
