@@ -974,10 +974,14 @@ func (m *Manager) runNativeGather(ctx context.Context, job *Job, opts GatherOpts
 			return
 		}
 
+		if strings.ContainsAny(gt, "/\\") || gt == ".." || gt == "." {
+			m.appendLog(job, fmt.Sprintf("Skipping invalid gather type: %s", gt))
+			continue
+		}
+
 		typeDestDir := destDir
 		if len(gatherTypes) > 1 {
-			cleanGT := filepath.Base(gt)
-			typeDestDir = filepath.Join(destDir, cleanGT)
+			typeDestDir = filepath.Join(destDir, gt)
 			os.MkdirAll(typeDestDir, 0700)
 			m.appendLog(job, fmt.Sprintf("=== Gather %d/%d: %s ===", i+1, len(gatherTypes), gt))
 		}
