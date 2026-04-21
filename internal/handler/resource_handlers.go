@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -13,6 +14,36 @@ import (
 	"github.com/redhat-consulting-services/ocp-support-web/internal/k8s"
 	"go.yaml.in/yaml/v2"
 )
+
+const redactedMessage = "<Redacted - log in to cluster to see this value>"
+
+// redactEncodedValues replaces base64-encoded string values inside "data"
+// maps with a redaction message. This prevents the resource browser from
+// exposing secret content — users should retrieve sensitive values by
+// logging in to the cluster directly.
+func redactEncodedValues(obj map[string]interface{}) {
+	dataMap, ok := obj["data"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	for key, val := range dataMap {
+		s, ok := val.(string)
+		if !ok {
+			continue
+		}
+		if isBase64(s) {
+			dataMap[key] = redactedMessage
+		}
+	}
+}
+
+func isBase64(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	_, err := base64.StdEncoding.DecodeString(s)
+	return err == nil
+}
 
 type apiResourceGroup struct {
 	Name      string        `json:"name"`
@@ -384,6 +415,8 @@ func (h *Handler) handleGetResource(w http.ResponseWriter, r *http.Request) {
 	if metadata, ok := data["metadata"].(map[string]interface{}); ok {
 		delete(metadata, "managedFields")
 	}
+
+	redactEncodedValues(data)
 
 	yamlBytes, err := yaml.Marshal(data)
 	if err != nil {

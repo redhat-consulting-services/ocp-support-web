@@ -89,7 +89,7 @@ func (e *Engine) collectNodeCommands(ctx context.Context, def GatherDefinition, 
 				}
 
 				filePath := nodeOutputPath(destDir, nodeName, cmd.OutputFile)
-				if err := writeFile(filePath, stdout); err != nil {
+				if err := writeFile(destDir, filePath, stdout); err != nil {
 					errs = append(errs, fmt.Errorf("write %s output for %s: %w", cmd.Name, nodeName, err))
 				}
 			}

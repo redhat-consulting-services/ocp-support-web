@@ -301,7 +301,7 @@
 
     // --- Job UI (simplified from support.js) ---
     window.stopJob = async function(jobId) {
-        if (!confirm('Stop this custom gather job?')) return;
+        if (!await pfConfirm('Stop Job', 'Stop this custom gather job?', { danger: true })) return;
         const btn = document.getElementById('stop-' + jobId);
         if (btn) { btn.disabled = true; btn.textContent = 'Stopping...'; }
         try {

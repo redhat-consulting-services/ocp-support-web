@@ -3,6 +3,7 @@ package mustgather
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"os"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/redhat-consulting-services/ocp-support-web/internal/k8s"
 	"github.com/redhat-consulting-services/ocp-support-web/internal/metrics"
+	"go.yaml.in/yaml/v2"
 )
 
 const gatherTimeout = 60 * time.Minute
@@ -73,10 +75,11 @@ type AnonOptions struct {
 	MACs     bool `json:"macs"`
 	Domains  bool `json:"domains"`
 	Services bool `json:"services"`
+	Secrets  bool `json:"secrets"`
 }
 
 func (a AnonOptions) Any() bool {
-	return a.IPs || a.MACs || a.Domains || a.Services
+	return a.IPs || a.MACs || a.Domains || a.Services || a.Secrets
 }
 
 type Job struct {
@@ -885,10 +888,14 @@ func (m *Manager) runGather(ctx context.Context, job *Job, opts GatherOpts) {
 		nodeMapping := m.buildAndLogNodeMapping(job)
 
 		m.appendLog(job, "Obfuscating data...")
-		if err := FastAnonymize(destDir, m.workDir, m.clusterDomain, job.AnonOpts, nodeMapping); err != nil {
+		redacted, err := FastAnonymize(destDir, m.workDir, m.clusterDomain, job.AnonOpts, nodeMapping)
+		if err != nil {
 			m.appendLog(job, fmt.Sprintf("Warning: anonymization error: %v", err))
 		} else {
 			m.appendLog(job, "Obfuscation complete.")
+			if redacted > 0 {
+				m.appendLog(job, fmt.Sprintf("Redacted %d secret value(s).", redacted))
+			}
 		}
 		m.appendLog(job, "=== Anonymizing data complete ===")
 	}
@@ -969,7 +976,7 @@ func (m *Manager) runNativeGather(ctx context.Context, job *Job, opts GatherOpts
 
 		typeDestDir := destDir
 		if len(gatherTypes) > 1 {
-			typeDestDir = filepath.Join(destDir, gt)
+			typeDestDir = filepath.Join(destDir, filepath.Clean(gt))
 			os.MkdirAll(typeDestDir, 0700)
 			m.appendLog(job, fmt.Sprintf("=== Gather %d/%d: %s ===", i+1, len(gatherTypes), gt))
 		}
@@ -1014,10 +1021,14 @@ func (m *Manager) runNativeGather(ctx context.Context, job *Job, opts GatherOpts
 
 		nodeMapping := m.buildAndLogNodeMapping(job)
 
-		if err := FastAnonymize(destDir, m.workDir, m.clusterDomain, job.AnonOpts, nodeMapping); err != nil {
+		redacted, err := FastAnonymize(destDir, m.workDir, m.clusterDomain, job.AnonOpts, nodeMapping)
+		if err != nil {
 			m.appendLog(job, fmt.Sprintf("Warning: anonymization error: %v", err))
 		} else {
 			m.appendLog(job, "Obfuscation complete.")
+			if redacted > 0 {
+				m.appendLog(job, fmt.Sprintf("Redacted %d secret value(s).", redacted))
+			}
 		}
 	}
 
@@ -1323,15 +1334,16 @@ func BuildNodeMapping(client *k8s.Client) (map[string]string, error) {
 // FastAnonymize applies regex-based obfuscation to all text files in a directory.
 // It replaces IPs, MACs, domain names, and service DNS based on the provided options.
 // nodeMapping provides optional hostname-to-pseudonym replacements applied first.
-func FastAnonymize(dir, workDir, clusterDomain string, opts AnonOptions, nodeMapping map[string]string) error {
+// Returns the number of secret values redacted (0 if secrets option not enabled).
+func FastAnonymize(dir, workDir, clusterDomain string, opts AnonOptions, nodeMapping map[string]string) (int, error) {
 	dir = filepath.Clean(dir)
 	if !strings.HasPrefix(dir, workDir) {
-		return fmt.Errorf("directory outside work dir")
+		return 0, fmt.Errorf("directory outside work dir")
 	}
 
 	if len(nodeMapping) > 0 {
 		if err := anonymizeNodeNames(dir, nodeMapping); err != nil {
-			return fmt.Errorf("node name anonymization: %w", err)
+			return 0, fmt.Errorf("node name anonymization: %w", err)
 		}
 	}
 
@@ -1375,12 +1387,90 @@ func FastAnonymize(dir, workDir, clusterDomain string, opts AnonOptions, nodeMap
 	sedCmd := exec.Command("xargs", sedArgs...)
 	sedCmd.Stdin, _ = findCmd.StdoutPipe()
 	if err := findCmd.Start(); err != nil {
-		return err
+		return 0, err
 	}
 	if err := sedCmd.Run(); err != nil {
-		return err
+		return 0, err
 	}
-	return findCmd.Wait()
+	if err := findCmd.Wait(); err != nil {
+		return 0, err
+	}
+
+	if opts.Secrets {
+		count, err := redactBase64Values(dir)
+		if err != nil {
+			return 0, fmt.Errorf("secret redaction: %w", err)
+		}
+		return count, nil
+	}
+
+	return 0, nil
+}
+
+// redactBase64Values walks YAML files and replaces base64-encoded values
+// in data/stringData maps with a redaction marker. Returns the number of
+// values redacted.
+func redactBase64Values(dir string) (int, error) {
+	total := 0
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return err
+		}
+		if !strings.HasSuffix(path, ".yaml") && !strings.HasSuffix(path, ".json") {
+			return nil
+		}
+
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+
+		var obj map[interface{}]interface{}
+		if err := yaml.Unmarshal(raw, &obj); err != nil {
+			return nil
+		}
+
+		changed := 0
+		for _, key := range []string{"data", "stringData"} {
+			dm, ok := obj[key].(map[interface{}]interface{})
+			if !ok {
+				continue
+			}
+			for k, v := range dm {
+				s, ok := v.(string)
+				if !ok || len(s) == 0 {
+					continue
+				}
+				if isBase64Encoded(s) {
+					dm[k] = "<REDACTED>"
+					changed++
+				}
+			}
+		}
+
+		if changed > 0 {
+			total += changed
+			out, err := yaml.Marshal(obj)
+			if err != nil {
+				return nil
+			}
+			return os.WriteFile(path, out, info.Mode())
+		}
+		return nil
+	})
+	return total, err
+}
+
+func isBase64Encoded(s string) bool {
+	if len(s) < 4 {
+		return false
+	}
+	decoded, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		return false
+	}
+	_ = decoded
+	return true
 }
 
 func anonymizeNodeNames(dir string, mapping map[string]string) error {

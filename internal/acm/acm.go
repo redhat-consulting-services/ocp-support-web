@@ -682,24 +682,58 @@ func (c *Client) StartRemoteGather(clusterName string, gatherTypes []string, sin
 }
 
 // pollAgentAndRetrieve polls the agent status and downloads the archive when ready.
+// Transient connection errors are tolerated — only consecutive failures count toward
+// a deadline, so flaky hub-to-agent links (e.g. cross-region) don't kill the gather.
 func (c *Client) pollAgentAndRetrieve(clusterName, podName string, client *k8s.Client, jobID string) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
-	timeout := time.After(60 * time.Minute)
+	const gatherTimeout = 60 * time.Minute
+	const maxConsecErrors = 60 // 60 × 5s = 5 minutes of continuous failure before giving up
+	deadline := time.Now().Add(gatherTimeout)
+	consecErrors := 0
 	statusPath := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s:8080/proxy/status", agentNamespace, podName)
 
 	for {
 		select {
-		case <-timeout:
-			c.setJobStatus(jobID, "failed", "Timed out waiting for gather completion")
-			return
 		case <-ticker.C:
+			if time.Now().After(deadline) {
+				c.setJobStatus(jobID, "failed", "Timed out waiting for gather completion")
+				return
+			}
+
 			raw, err := client.GetRaw(statusPath)
 			if err != nil {
-				log.Printf("Agent poll error for %s: %v", jobID, err)
+				consecErrors++
+				if k8s.IsNotFound(err) {
+					// Pod replaced — re-resolve and rebuild status path
+					c.invalidateAgentAccess(clusterName)
+					newClient, newPod, accessErr := c.getAgentAccess(clusterName)
+					if accessErr == nil {
+						client = newClient
+						podName = newPod
+						statusPath = fmt.Sprintf("/api/v1/namespaces/%s/pods/%s:8080/proxy/status", agentNamespace, newPod)
+						consecErrors = 0
+						c.appendLog(jobID, "Agent pod changed, reconnected.\n")
+					}
+				}
+				if consecErrors >= maxConsecErrors {
+					c.setJobStatus(jobID, "failed", "Lost connection to agent (5 minutes of consecutive errors)")
+					return
+				}
+				if consecErrors == 1 {
+					c.appendLog(jobID, "Connection interrupted, retrying...\n")
+				}
+				log.Printf("Agent poll error for %s (%d consecutive): %v", jobID, consecErrors, err)
 				continue
 			}
+
+			// Successful poll — reset error counter and extend deadline
+			if consecErrors > 0 {
+				c.appendLog(jobID, "Connection restored.\n")
+			}
+			consecErrors = 0
+			deadline = time.Now().Add(gatherTimeout)
 
 			var agentStatus struct {
 				Status    string `json:"status"`
@@ -723,7 +757,6 @@ func (c *Client) pollAgentAndRetrieve(clusterName, podName string, client *k8s.C
 				c.setJobStatus(jobID, "failed", agentStatus.Error)
 				return
 			case "serving":
-				// Archive ready — download it
 				c.setJobStatus(jobID, "downloading", "")
 				c.appendLog(jobID, "Archive ready on remote cluster, downloading...\n")
 
@@ -733,7 +766,6 @@ func (c *Client) pollAgentAndRetrieve(clusterName, podName string, client *k8s.C
 				}
 				return
 			}
-			// "gathering" or "idle" — keep polling
 		}
 	}
 }
@@ -795,9 +827,13 @@ func (c *Client) retrieveArchive(clusterName, podName string, client *k8s.Client
 			}
 		}
 
-		if err := c.anonymizeArchive(filePath, anonOpts, client); err != nil {
+		redacted, err := c.anonymizeArchive(filePath, anonOpts, client)
+		if err != nil {
 			c.appendLog(jobID, fmt.Sprintf("Warning: anonymization failed: %v\n", err))
 		} else {
+			if redacted > 0 {
+				c.appendLog(jobID, fmt.Sprintf("Redacted %d secret value(s).\n", redacted))
+			}
 			// Rename to indicate anonymized
 			anonName := strings.TrimSuffix(fileName, ".tar.gz") + "-anonymized.tar.gz"
 			anonPath := filepath.Join(c.workDir, anonName)
@@ -822,28 +858,34 @@ func (c *Client) retrieveArchive(clusterName, podName string, client *k8s.Client
 
 // anonymizeArchive extracts a tar.gz, runs FastAnonymize, and re-creates the archive.
 // managedClient is the k8s client for the managed cluster whose nodes should be mapped.
-func (c *Client) anonymizeArchive(archivePath string, opts mustgather.AnonOptions, managedClient *k8s.Client) error {
+func (c *Client) anonymizeArchive(archivePath string, opts mustgather.AnonOptions, managedClient *k8s.Client) (int, error) {
 	extractDir := archivePath + "-extract"
 	if err := extractTarGz(archivePath, extractDir); err != nil {
-		return fmt.Errorf("extract: %w", err)
+		return 0, fmt.Errorf("extract: %w", err)
 	}
 	defer os.RemoveAll(extractDir)
 
 	nodeMapping, _ := mustgather.BuildNodeMapping(managedClient)
-	if err := mustgather.FastAnonymize(extractDir, c.workDir, c.clusterDomain, opts, nodeMapping); err != nil {
-		return fmt.Errorf("anonymize: %w", err)
+	redacted, err := mustgather.FastAnonymize(extractDir, c.workDir, c.clusterDomain, opts, nodeMapping)
+	if err != nil {
+		return 0, fmt.Errorf("anonymize: %w", err)
 	}
 
 	os.Remove(archivePath)
-	return createTarGz(archivePath, extractDir)
+	return redacted, createTarGz(archivePath, extractDir)
 }
 
 // longTimeoutStream creates a long-timeout HTTP GET to stream large files from the agent.
+// Inherits TLS configuration from the provided k8s client.
 func (c *Client) longTimeoutStream(client *k8s.Client, path string) (io.ReadCloser, error) {
+	var tlsCfg *tls.Config
+	if t, ok := client.HTTPClient.Transport.(*http.Transport); ok && t.TLSClientConfig != nil {
+		tlsCfg = t.TLSClientConfig.Clone()
+	}
 	httpClient := &http.Client{
 		Timeout: 30 * time.Minute,
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig: tlsCfg,
 		},
 	}
 

@@ -1,25 +1,53 @@
 package collector
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
+// safePath validates that the resolved path stays within baseDir.
+func safePath(baseDir, path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve path: %w", err)
+	}
+	base, err := filepath.Abs(baseDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve base: %w", err)
+	}
+	if !strings.HasPrefix(abs, base+string(filepath.Separator)) && abs != base {
+		return "", fmt.Errorf("path %q escapes base directory", path)
+	}
+	return abs, nil
+}
+
 // writeFile creates parent directories and writes data to the given path.
-func writeFile(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+// The path must resolve within baseDir.
+func writeFile(baseDir, path string, data []byte) error {
+	safe, err := safePath(baseDir, path)
+	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0600)
+	if err := os.MkdirAll(filepath.Dir(safe), 0700); err != nil {
+		return err
+	}
+	return os.WriteFile(safe, data, 0600)
 }
 
 // writeStream creates parent directories and streams data to the given path.
-func writeStream(path string, r io.Reader) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+// The path must resolve within baseDir.
+func writeStream(baseDir, path string, r io.Reader) error {
+	safe, err := safePath(baseDir, path)
+	if err != nil {
 		return err
 	}
-	f, err := os.Create(path)
+	if err := os.MkdirAll(filepath.Dir(safe), 0700); err != nil {
+		return err
+	}
+	f, err := os.Create(safe)
 	if err != nil {
 		return err
 	}

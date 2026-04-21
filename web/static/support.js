@@ -39,7 +39,7 @@
     }
 
     window.stopJob = async function(jobId, label) {
-        if (!confirm('Are you sure you want to stop the ' + label + ' job?')) return;
+        if (!await pfConfirm('Stop Job', 'Are you sure you want to stop the ' + label + ' job?', { danger: true })) return;
         const btn = document.getElementById('stop-' + jobId);
         if (btn) {
             btn.disabled = true;
@@ -59,7 +59,8 @@
     const anonMACs = document.getElementById('anon-macs');
     const anonDomains = document.getElementById('anon-domains');
     const anonServices = document.getElementById('anon-services');
-    const anonCheckboxes = [anonIPs, anonMACs, anonDomains, anonServices];
+    const anonSecrets = document.getElementById('anon-secrets');
+    const anonCheckboxes = [anonIPs, anonMACs, anonDomains, anonServices, anonSecrets];
     let anonymizeEnabled = false;
 
     function updateAnonHint() {
@@ -247,9 +248,10 @@
             ips: anonymizeEnabled && anonIPs.checked,
             macs: anonymizeEnabled && anonMACs.checked,
             domains: anonymizeEnabled && anonDomains.checked,
-            services: anonymizeEnabled && anonServices.checked
+            services: anonymizeEnabled && anonServices.checked,
+            secrets: anonymizeEnabled && anonSecrets.checked
         };
-        const anonymize = anonOpts.ips || anonOpts.macs || anonOpts.domains || anonOpts.services;
+        const anonymize = anonOpts.ips || anonOpts.macs || anonOpts.domains || anonOpts.services || anonOpts.secrets;
         const since = sinceEnabled ? sinceSelect.value : '';
         const nodeName = nodeNameSelect ? nodeNameSelect.value : '';
         const nodeSelector = nodeSelectorSelect ? nodeSelectorSelect.value : '';
@@ -491,7 +493,7 @@
     const etcdBtn = document.getElementById('start-etcd-backup-btn');
     if (etcdBtn) {
         etcdBtn.addEventListener('click', async () => {
-            if (!confirm('Start an etcd backup? This will connect to a master node and create a snapshot.')) return;
+            if (!await pfConfirm('Start Etcd Backup', 'Start an etcd backup? This will connect to a master node and create a snapshot.')) return;
             etcdBtn.disabled = true;
             etcdBtn.textContent = 'Starting...';
             try {

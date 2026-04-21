@@ -54,7 +54,7 @@ func (e *Engine) collectClusterResources(ctx context.Context, def GatherDefiniti
 			}
 
 			filePath := clusterResourcePath(destDir, spec.GroupDir(), spec.Resource, name)
-			if err := writeFile(filePath, yamlData); err != nil {
+			if err := writeFile(destDir, filePath, yamlData); err != nil {
 				errs = append(errs, fmt.Errorf("write %s/%s: %w", spec.Resource, name, err))
 			}
 		}
@@ -118,7 +118,7 @@ func (e *Engine) collectNamespacedResources(ctx context.Context, def GatherDefin
 				}
 
 				filePath := namespacedResourcePath(destDir, ns, spec.GroupDir(), spec.Resource, name)
-				if err := writeFile(filePath, yamlData); err != nil {
+				if err := writeFile(destDir, filePath, yamlData); err != nil {
 					errs = append(errs, fmt.Errorf("write %s/%s/%s: %w", ns, spec.Resource, name, err))
 				}
 
@@ -126,7 +126,7 @@ func (e *Engine) collectNamespacedResources(ctx context.Context, def GatherDefin
 				// to match the traditional oc adm inspect layout
 				if spec.Resource == "pods" {
 					podPath := podYAMLPath(destDir, ns, name)
-					_ = writeFile(podPath, yamlData)
+					_ = writeFile(destDir, podPath, yamlData)
 				}
 			}
 		}
@@ -201,7 +201,7 @@ func appendErrorLog(destDir string, errs []error) {
 	}
 	content := strings.Join(lines, "\n") + "\n"
 	path := filepath.Join(destDir, "gather-errors.log")
-	_ = writeFile(path, []byte(content))
+	_ = writeFile(destDir, path, []byte(content))
 }
 
 // toJSON converts a Go value to indented JSON bytes.

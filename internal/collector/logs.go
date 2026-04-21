@@ -119,7 +119,7 @@ func (e *Engine) fetchPodLog(ctx context.Context, destDir, namespace, pod, conta
 	defer stream.Close()
 
 	filePath := podLogPath(destDir, namespace, pod, container, current)
-	if err := writeStream(filePath, stream); err != nil {
+	if err := writeStream(destDir, filePath, stream); err != nil {
 		return []error{fmt.Errorf("write log %s/%s/%s: %w", namespace, pod, container, err)}
 	}
 

@@ -11,6 +11,35 @@
     var hasDeploying = false;
 
     loadClusters();
+    loadExistingJobs();
+
+    async function loadExistingJobs() {
+        try {
+            var res = await fetch('/api/acm/gather/jobs');
+            if (!res.ok) return;
+            var jobs = await res.json();
+            if (!jobs || jobs.length === 0) return;
+
+            for (var i = 0; i < jobs.length; i++) {
+                var job = jobs[i];
+                var safeId = job.id.replace(/[^a-zA-Z0-9-]/g, '-');
+                if (document.getElementById('job-card-' + safeId)) continue;
+
+                createJobCard(job.id, job.clusterName, job.gatherType || 'Default');
+                updateJobUI(job);
+
+                if (job.status !== 'complete' && job.status !== 'failed') {
+                    activeJobs[job.id] = true;
+                }
+            }
+
+            if (Object.keys(activeJobs).length > 0) {
+                startPolling();
+            }
+        } catch (e) {
+            // ignore — jobs will appear when started
+        }
+    }
 
     // Anon toggle
     document.getElementById('modal-anon-toggle').addEventListener('change', function() {
@@ -333,7 +362,8 @@
                 ips: document.getElementById('anon-ips').checked,
                 macs: document.getElementById('anon-macs').checked,
                 domains: document.getElementById('anon-domains').checked,
-                services: document.getElementById('anon-services').checked
+                services: document.getElementById('anon-services').checked,
+                secrets: document.getElementById('anon-secrets').checked
             };
         }
 
@@ -532,7 +562,7 @@
     }
 
     async function updateAgent(clusterName, btn) {
-        if (!confirm('Update the agent on ' + clusterName + ' to version ' + hubVersion + '? This will briefly interrupt any running gather.')) return;
+        if (!await pfConfirm('Update Agent', 'Update the agent on ' + clusterName + ' to version ' + hubVersion + '? This will briefly interrupt any running gather.')) return;
         btn.disabled = true;
         btn.textContent = 'Updating...';
         try {
@@ -554,7 +584,7 @@
     }
 
     async function reinstallAgent(clusterName, btn) {
-        if (!confirm('Reinstall the agent on ' + clusterName + '? This will remove and redeploy all agent resources.')) return;
+        if (!await pfConfirm('Reinstall Agent', 'Reinstall the agent on ' + clusterName + '? This will remove and redeploy all agent resources.', { danger: true })) return;
         btn.disabled = true;
         btn.textContent = 'Reinstalling...';
         try {
@@ -575,7 +605,7 @@
     }
 
     async function removeAgent(clusterName, btn) {
-        if (!confirm('Remove the agent from ' + clusterName + '? This will delete all agent resources on the remote cluster.')) return;
+        if (!await pfConfirm('Remove Agent', 'Remove the agent from ' + clusterName + '? This will delete all agent resources on the remote cluster.', { danger: true })) return;
         btn.disabled = true;
         btn.textContent = 'Removing...';
         try {
