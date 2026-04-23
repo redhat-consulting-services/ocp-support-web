@@ -377,6 +377,26 @@ func (m *Manager) StopJob(id string) bool {
 	return true
 }
 
+func (m *Manager) DeleteJob(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	j, ok := m.jobs[id]
+	if !ok {
+		return false
+	}
+	if j.Status == "running" {
+		if cancel, exists := m.cancels[id]; exists {
+			cancel()
+		}
+	}
+	if j.FilePath != "" {
+		os.Remove(j.FilePath)
+	}
+	delete(m.jobs, id)
+	delete(m.cancels, id)
+	return true
+}
+
 func (m *Manager) GetJob(id string) *Job {
 	m.mu.Lock()
 	defer m.mu.Unlock()

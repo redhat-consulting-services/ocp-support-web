@@ -1,0 +1,25 @@
+# ConsolePlugin CR — registered by the operator when consolePlugin is enabled.
+# The console loads the React bundle from the plugin service and proxies
+# API calls to the backend service, forwarding the user's bearer token.
+apiVersion: console.openshift.io/v1
+kind: ConsolePlugin
+metadata:
+  name: ocp-support-web
+spec:
+  displayName: OCP Support Web
+  backend:
+    type: Service
+    service:
+      name: ocp-support-web-plugin
+      namespace: ocp-support-web
+      port: 9443
+      basePath: /
+  proxy:
+    - alias: backend
+      authorization: UserToken
+      endpoint:
+        type: Service
+        service:
+          name: ocp-support-web-api
+          namespace: ocp-support-web
+          port: 9443

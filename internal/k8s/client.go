@@ -3,6 +3,7 @@ package k8s
 import (
 	"bytes"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,14 @@ import (
 	"strings"
 	"time"
 )
+
+func base64Decode(s string) (string, error) {
+	b, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
 
 // Client provides low-level HTTP access to the Kubernetes API.
 type Client struct {
@@ -374,5 +383,18 @@ func StringOrEmpty(m map[string]interface{}, key string) string {
 		return v
 	}
 	return ""
+}
+
+// DecodeBase64 extracts a base64-encoded string value from a Secret data map.
+func DecodeBase64(m map[string]interface{}, key string) string {
+	v, ok := m[key].(string)
+	if !ok || v == "" {
+		return ""
+	}
+	decoded, err := base64Decode(v)
+	if err != nil {
+		return ""
+	}
+	return decoded
 }
 

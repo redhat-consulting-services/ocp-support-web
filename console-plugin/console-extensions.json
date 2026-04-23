@@ -1,0 +1,161 @@
+[
+  {
+    "type": "console.navigation/section",
+    "properties": {
+      "id": "support-tools",
+      "name": "Support Tools",
+      "insertAfter": "administration"
+    },
+    "flags": {
+      "required": ["SUPPORT_TOOLS"]
+    }
+  },
+  {
+    "type": "console.flag/model",
+    "properties": {
+      "model": {
+        "group": "support.openshift.io",
+        "version": "v1alpha1",
+        "kind": "OCPSupportWeb"
+      },
+      "flag": "SUPPORT_TOOLS"
+    }
+  },
+  {
+    "type": "console.navigation/href",
+    "properties": {
+      "id": "support-tools-gather",
+      "name": "Must-Gather",
+      "href": "/support-tools/gather",
+      "perspective": "admin",
+      "section": "support-tools",
+      "accessReview": [
+        {
+          "group": "support.openshift.io",
+          "resource": "ocpsupportwebs",
+          "verb": "get"
+        }
+      ]
+    }
+  },
+  {
+    "type": "console.navigation/href",
+    "properties": {
+      "id": "support-tools-status",
+      "name": "Cluster Status",
+      "href": "/support-tools/status",
+      "perspective": "admin",
+      "section": "support-tools",
+      "accessReview": [
+        {
+          "group": "support.openshift.io",
+          "resource": "ocpsupportwebs",
+          "verb": "get"
+        }
+      ]
+    }
+  },
+  {
+    "type": "console.navigation/href",
+    "properties": {
+      "id": "support-tools-advanced",
+      "name": "Custom Gather",
+      "href": "/support-tools/advanced",
+      "perspective": "admin",
+      "section": "support-tools",
+      "accessReview": [
+        {
+          "group": "support.openshift.io",
+          "resource": "ocpsupportwebs",
+          "verb": "get"
+        }
+      ]
+    }
+  },
+  {
+    "type": "console.navigation/href",
+    "properties": {
+      "id": "support-tools-resources",
+      "name": "Resource Browser",
+      "href": "/support-tools/resources",
+      "perspective": "admin",
+      "section": "support-tools",
+      "accessReview": [
+        {
+          "group": "support.openshift.io",
+          "resource": "ocpsupportwebs",
+          "verb": "get"
+        }
+      ]
+    }
+  },
+  {
+    "type": "console.flag/model",
+    "properties": {
+      "model": {
+        "group": "operator.open-cluster-management.io",
+        "version": "v1",
+        "kind": "MultiClusterHub"
+      },
+      "flag": "ACM_INSTALLED"
+    }
+  },
+  {
+    "type": "console.navigation/href",
+    "properties": {
+      "id": "support-tools-acm",
+      "name": "ACM Gathers",
+      "href": "/support-tools/acm",
+      "perspective": "admin",
+      "section": "support-tools",
+      "accessReview": [
+        {
+          "group": "support.openshift.io",
+          "resource": "ocpsupportwebs",
+          "verb": "get"
+        }
+      ]
+    },
+    "flags": {
+      "required": ["ACM_INSTALLED"]
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/support-tools/gather",
+      "component": { "$codeRef": "pages.GatherPage" }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/support-tools/status",
+      "component": { "$codeRef": "pages.StatusPage" }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/support-tools/advanced",
+      "component": { "$codeRef": "pages.AdvancedPage" }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/support-tools/resources",
+      "component": { "$codeRef": "pages.ResourcesPage" }
+    }
+  },
+  {
+    "type": "console.page/route",
+    "properties": {
+      "path": "/support-tools/acm",
+      "component": { "$codeRef": "pages.ACMPage" }
+    },
+    "flags": {
+      "required": ["ACM_INSTALLED"]
+    }
+  }
+]

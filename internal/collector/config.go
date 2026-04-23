@@ -405,11 +405,11 @@ var builtinDefinitions = map[string]GatherDefinition{
 			{Namespaces: allOpenShiftNamespaces, LabelSelector: "cdi.kubevirt.io", MaxLines: 5000},
 		},
 		PodExecs: []PodExecSpec{
-			// virsh diagnostics via virt-handler (runs on each node with VMs)
+			// virsh diagnostics via virt-handler — available on CNV ≤4.14, removed in 4.15+.
+			// On newer versions these fail with warnings; VM data is still collected via KubeVirt API resources.
 			{Name: "virsh-capabilities", Namespace: "openshift-cnv", PodSelector: "kubevirt.io=virt-handler", Container: "virt-handler", Command: []string{"virsh", "-r", "-c", "qemu:///system", "capabilities"}, OutputFile: "virsh-capabilities.xml"},
 			{Name: "virsh-domcapabilities", Namespace: "openshift-cnv", PodSelector: "kubevirt.io=virt-handler", Container: "virt-handler", Command: []string{"virsh", "-r", "-c", "qemu:///system", "domcapabilities"}, OutputFile: "virsh-domcapabilities.xml"},
 			{Name: "virsh-list-all", Namespace: "openshift-cnv", PodSelector: "kubevirt.io=virt-handler", Container: "virt-handler", Command: []string{"virsh", "-r", "-c", "qemu:///system", "list", "--all"}, OutputFile: "virsh-list.txt"},
-			// Per-VM details (iterate all running domains)
 			{Name: "virsh-dumpxml-all", Namespace: "openshift-cnv", PodSelector: "kubevirt.io=virt-handler", Container: "virt-handler", Command: []string{"bash", "-c", "for dom in $(virsh -r -c qemu:///system list --name 2>/dev/null); do [ -z \"$dom\" ] && continue; echo \"=== $dom ===\"; virsh -r -c qemu:///system dumpxml \"$dom\" 2>/dev/null; done"}, OutputFile: "virsh-dumpxml-all.xml"},
 			{Name: "virsh-domblklist-all", Namespace: "openshift-cnv", PodSelector: "kubevirt.io=virt-handler", Container: "virt-handler", Command: []string{"bash", "-c", "for dom in $(virsh -r -c qemu:///system list --name 2>/dev/null); do [ -z \"$dom\" ] && continue; echo \"=== $dom ===\"; virsh -r -c qemu:///system domblklist \"$dom\" 2>/dev/null; done"}, OutputFile: "virsh-domblklist-all.txt"},
 			{Name: "virsh-domjobinfo-all", Namespace: "openshift-cnv", PodSelector: "kubevirt.io=virt-handler", Container: "virt-handler", Command: []string{"bash", "-c", "for dom in $(virsh -r -c qemu:///system list --name 2>/dev/null); do [ -z \"$dom\" ] && continue; echo \"=== $dom ===\"; virsh -r -c qemu:///system domjobinfo \"$dom\" 2>/dev/null; done"}, OutputFile: "virsh-domjobinfo-all.txt"},

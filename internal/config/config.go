@@ -8,9 +8,14 @@ import (
 
 type AppConfig struct {
 	ListenAddr    string
+	TLSListenAddr string
+	TLSCertFile   string
+	TLSKeyFile    string
 	MustGatherDir string
 	NativeGather  bool
+	ConsolePlugin bool
 	AgentImage    string // container image for remote agents on managed clusters
+	AllowedGroups []string
 	OpenShift     OpenShiftConfig
 	Images        ImageConfig
 }
@@ -49,9 +54,14 @@ const saTokenPath = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 func Load() (*AppConfig, error) {
 	cfg := &AppConfig{
 		ListenAddr:    envOr("LISTEN_ADDR", "127.0.0.1:8080"),
+		TLSListenAddr: os.Getenv("TLS_LISTEN_ADDR"),
+		TLSCertFile:   envOr("TLS_CERT_FILE", "/var/serving-cert/tls.crt"),
+		TLSKeyFile:    envOr("TLS_KEY_FILE", "/var/serving-cert/tls.key"),
 		MustGatherDir: envOr("MUST_GATHER_DIR", "/tmp/ocp-support-web/gather"),
 		NativeGather:  os.Getenv("NATIVE_GATHER") != "false",
+		ConsolePlugin: os.Getenv("CONSOLE_PLUGIN") == "true",
 		AgentImage:    os.Getenv("AGENT_IMAGE"), // auto-detected from pod spec if empty
+		AllowedGroups: parseGroups(os.Getenv("ALLOWED_GROUPS")),
 		OpenShift: OpenShiftConfig{
 			APIURL:          os.Getenv("OPENSHIFT_API_URL"),
 			Token:           os.Getenv("OPENSHIFT_TOKEN"),
@@ -109,4 +119,18 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func parseGroups(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	groups := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if g := strings.TrimSpace(p); g != "" {
+			groups = append(groups, g)
+		}
+	}
+	return groups
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/redhat-consulting-services/ocp-support-web/internal/monitoring"
 	"github.com/redhat-consulting-services/ocp-support-web/internal/mustgather"
 	"github.com/redhat-consulting-services/ocp-support-web/internal/status"
+	"github.com/redhat-consulting-services/ocp-support-web/internal/upload"
 )
 
 var validJobID = regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
@@ -29,12 +30,13 @@ type Handler struct {
 	mon     *monitoring.Client
 	acm     *acm.Client
 	k8s     *k8s.Client
+	ul      *upload.Manager
 	tmpl    *template.Template
 	static  fs.FS
 	version string
 }
 
-func New(mg *mustgather.Manager, st *status.Client, mon *monitoring.Client, acmClient *acm.Client, k8sClient *k8s.Client, webFS fs.FS, version string) (*Handler, error) {
+func New(mg *mustgather.Manager, st *status.Client, mon *monitoring.Client, acmClient *acm.Client, k8sClient *k8s.Client, ul *upload.Manager, webFS fs.FS, version string) (*Handler, error) {
 	tmplFS, err := fs.Sub(webFS, "templates")
 	if err != nil {
 		return nil, err
@@ -55,6 +57,7 @@ func New(mg *mustgather.Manager, st *status.Client, mon *monitoring.Client, acmC
 		mon:     mon,
 		acm:     acmClient,
 		k8s:     k8sClient,
+		ul:      ul,
 		tmpl:    tmpl,
 		static:  staticFS,
 		version: version,
@@ -82,6 +85,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/support/gather", h.handleStartGather)
 	mux.HandleFunc("GET /api/support/gather/{jobId}", h.handleGatherStatus)
 	mux.HandleFunc("POST /api/support/gather/{jobId}/stop", h.handleStopGather)
+	mux.HandleFunc("DELETE /api/support/gather/{jobId}", h.handleDeleteGather)
 	mux.HandleFunc("GET /api/support/gather/{jobId}/download", h.handleGatherDownload)
 	mux.HandleFunc("POST /api/support/etcd-diag", h.handleStartDiag)
 	mux.HandleFunc("GET /api/support/etcd-diag/{jobId}", h.handleDiagStatus)
@@ -121,6 +125,9 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/acm/clusters/{cluster}/agent", h.handleDeployAgent)
 	mux.HandleFunc("DELETE /api/acm/clusters/{cluster}/agent", h.handleRemoveAgent)
 	mux.HandleFunc("POST /api/acm/clusters/{cluster}/agent/redeploy", h.handleRedeployAgent)
+
+	mux.HandleFunc("GET /api/support/upload/config", h.handleUploadConfig)
+	mux.HandleFunc("POST /api/support/upload/{jobId}", h.handleUpload)
 
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(h.static)))
 }
@@ -340,6 +347,20 @@ func (h *Handler) handleStopGather(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "stopping"})
+}
+
+func (h *Handler) handleDeleteGather(w http.ResponseWriter, r *http.Request) {
+	jobID := r.PathValue("jobId")
+	if !validJobID.MatchString(jobID) {
+		jsonError(w, "invalid job ID", 400)
+		return
+	}
+	if !h.mg.DeleteJob(jobID) {
+		jsonError(w, "job not found", 404)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
 }
 
 func (h *Handler) handleGatherDownload(w http.ResponseWriter, r *http.Request) {

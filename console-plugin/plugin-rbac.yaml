@@ -1,0 +1,26 @@
+# ClusterRole granting read access to OcpSupportWeb CR.
+# The console plugin's nav item uses accessReview to check this —
+# users who can't GET this resource won't see the plugin at all.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ocp-support-web-viewer
+rules:
+  - apiGroups: ["support.openshift.io"]
+    resources: ["ocpsupportwebs"]
+    verbs: ["get", "list"]
+---
+# The operator creates one ClusterRoleBinding per spec.allowedGroups entry.
+# Example for "cluster-admins" group:
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ocp-support-web-viewer-cluster-admins
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ocp-support-web-viewer
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: cluster-admins

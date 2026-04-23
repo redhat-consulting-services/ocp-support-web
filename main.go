@@ -6,17 +6,21 @@ import (
 	"net/http"
 	"os"
 
+	"strings"
+
 	"github.com/redhat-consulting-services/ocp-support-web/internal/acm"
 	"github.com/redhat-consulting-services/ocp-support-web/internal/agent"
+	"github.com/redhat-consulting-services/ocp-support-web/internal/auth"
 	"github.com/redhat-consulting-services/ocp-support-web/internal/collector"
-	"github.com/redhat-consulting-services/ocp-support-web/internal/gather"
 	"github.com/redhat-consulting-services/ocp-support-web/internal/config"
+	"github.com/redhat-consulting-services/ocp-support-web/internal/gather"
 	"github.com/redhat-consulting-services/ocp-support-web/internal/handler"
 	"github.com/redhat-consulting-services/ocp-support-web/internal/k8s"
 	"github.com/redhat-consulting-services/ocp-support-web/internal/metrics"
 	"github.com/redhat-consulting-services/ocp-support-web/internal/monitoring"
 	"github.com/redhat-consulting-services/ocp-support-web/internal/mustgather"
 	"github.com/redhat-consulting-services/ocp-support-web/internal/status"
+	"github.com/redhat-consulting-services/ocp-support-web/internal/upload"
 	"github.com/redhat-consulting-services/ocp-support-web/web"
 )
 
@@ -70,10 +74,20 @@ func main() {
 		cfg.OpenShift.InsecureSkipTLS,
 	)
 
+	podNS := os.Getenv("POD_NAMESPACE")
+	if podNS == "" {
+		if nsBytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace"); err == nil {
+			podNS = strings.TrimSpace(string(nsBytes))
+		}
+	}
+	if podNS == "" {
+		podNS = "ocp-support-web"
+	}
+
 	var coll mustgather.Collector
 	if cfg.NativeGather {
-		coll = &collectorAdapter{engine: collector.NewEngine(k8sClient, "ocp-support-web")}
-		log.Printf("Native gather mode enabled")
+		coll = &collectorAdapter{engine: collector.NewEngine(k8sClient, podNS)}
+		log.Printf("Native gather mode enabled (namespace: %s)", podNS)
 	}
 
 	mgr, err := mustgather.NewManager(cfg.MustGatherDir, mustgather.ImageConfig{
@@ -129,13 +143,38 @@ func main() {
 		log.Printf("Monitoring (etcd health) enabled")
 	}
 
-	h, err := handler.New(mgr, stClient, monClient, acmClient, k8sClient, web.FS, version)
+	var ulMgr *upload.Manager
+	if podNS != "" {
+		ulMgr = upload.NewManager(k8sClient, podNS)
+		if ulMgr.IsConfigured() {
+			log.Printf("Red Hat upload enabled (secret found in %s)", podNS)
+		} else {
+			log.Printf("Red Hat upload available (create secret %s/%s to enable)", podNS, "ocp-support-upload-creds")
+		}
+	}
+
+	h, err := handler.New(mgr, stClient, monClient, acmClient, k8sClient, ulMgr, web.FS, version)
 	if err != nil {
 		log.Fatalf("Failed to create handler: %v", err)
 	}
 
 	mux := http.NewServeMux()
 	h.Register(mux)
+
+	var rootHandler http.Handler = mux
+	if cfg.ConsolePlugin {
+		authMiddleware := auth.NewMiddleware(
+			cfg.OpenShift.APIURL,
+			cfg.OpenShift.InsecureSkipTLS,
+			cfg.AllowedGroups,
+		)
+		rootHandler = authMiddleware.Wrap(mux)
+		if len(cfg.AllowedGroups) > 0 {
+			log.Printf("Console plugin mode: auth middleware enabled for groups %v", cfg.AllowedGroups)
+		} else {
+			log.Printf("Console plugin mode: auth middleware enabled (any valid token)")
+		}
+	}
 
 	go func() {
 		metricsMux := http.NewServeMux()
@@ -146,8 +185,26 @@ func main() {
 		}
 	}()
 
-	log.Printf("OCP Support Web listening on %s", cfg.ListenAddr)
-	if err := http.ListenAndServe(cfg.ListenAddr, metrics.Middleware(mux)); err != nil {
-		log.Fatalf("Server error: %v", err)
+	if cfg.ConsolePlugin {
+		if cfg.TLSListenAddr == "" {
+			log.Fatalf("Console plugin mode requires TLS: set TLS_LISTEN_ADDR, TLS_CERT_FILE, TLS_KEY_FILE")
+		}
+		log.Printf("OCP Support Web (TLS-only) listening on %s", cfg.TLSListenAddr)
+		if err := http.ListenAndServeTLS(cfg.TLSListenAddr, cfg.TLSCertFile, cfg.TLSKeyFile, metrics.Middleware(rootHandler)); err != nil {
+			log.Fatalf("TLS server error: %v", err)
+		}
+	} else {
+		if cfg.TLSListenAddr != "" {
+			go func() {
+				log.Printf("TLS API server listening on %s", cfg.TLSListenAddr)
+				if err := http.ListenAndServeTLS(cfg.TLSListenAddr, cfg.TLSCertFile, cfg.TLSKeyFile, metrics.Middleware(rootHandler)); err != nil {
+					log.Fatalf("TLS server error: %v", err)
+				}
+			}()
+		}
+		log.Printf("OCP Support Web listening on %s", cfg.ListenAddr)
+		if err := http.ListenAndServe(cfg.ListenAddr, metrics.Middleware(rootHandler)); err != nil {
+			log.Fatalf("Server error: %v", err)
+		}
 	}
 }
